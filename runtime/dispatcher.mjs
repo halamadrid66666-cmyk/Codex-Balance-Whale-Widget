@@ -29,7 +29,7 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, monitor 
   const displayModeFile = path.join(dataDir, 'display-mode.json');
   const displayMode = () => readJson(displayModeFile, {}).mode === 'api' ? 'api' : 'subscription';
   const routes = new Map(), effects = [];
-  createWidgetHost(dataDir).apply({ whale, webServer: { register: r => { routes.set(r.path, r.handler); return () => routes.delete(r.path); }, tapIndex: () => () => {} }, effect: f => effects.push(f()) });
+  const host = createWidgetHost(dataDir).apply({ whale, webServer: { register: r => { routes.set(r.path, r.handler); return () => routes.delete(r.path); }, tapIndex: () => () => {} }, effect: f => effects.push(f()) });
   const watcher = monitor ? new SessionMonitor(whale) : null;
   watcher?.start();
   const timer = autoRefresh ? setInterval(() => { if (displayMode() === 'api') whale.getBalance().catch(() => {}); }, 60000) : null;
@@ -114,10 +114,19 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, monitor 
       if (url.pathname === '/api/ui-state') {
         if (method === 'GET') return jsonResult(200, { ok: true, values: readJson(stateFile, {}) });
         if (method === 'PUT') {
-          const input = parsed(), values = {};
+          const input = parsed();
           if (!input || Array.isArray(input) || typeof input !== 'object') return jsonResult(400, { ok: false });
-          for (const [key, value] of Object.entries(input)) if (/^dshw[-v]/.test(key) && typeof value === 'string' && value.length < 1024 * 1024) values[key] = value;
-          writeJson(stateFile, values); return jsonResult(200, { ok: true });
+          // Keyed merge, not a whole-file replace. The previous version rebuilt
+          // the file from only the submitted keys, so any key a caller did not
+          // know about was deleted. null is the explicit way to remove a key.
+          const current = readJson(stateFile, {});
+          const next = { ...current };
+          for (const [k, v] of Object.entries(input)) {
+            if (!/^dshw[-v]/.test(k)) continue;
+            if (v === null) { delete next[k]; continue; }
+            if (typeof v === 'string' && v.length < 1024 * 1024) next[k] = v;
+          }
+          writeJson(stateFile, next); return jsonResult(200, { ok: true, values: next });
         }
         return jsonResult(405, { ok: false });
       }
@@ -127,6 +136,12 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, monitor 
       uiFiles['/account-view.js']='account-view.js';
       uiFiles['/shape.js']='shape.js';
       uiFiles['/dashboard.js']='dashboard.js';
+      uiFiles['/settings.html']='settings.html';
+      uiFiles['/settings.css']='settings.css';
+      uiFiles['/settings.js']='settings.js';
+      uiFiles['/settings-catalog.js']='settings-catalog.js';
+      uiFiles['/settings-help.js']='settings-help.js';
+      uiFiles['/settings-pages.js']='settings-pages.js';
       let file;
       if (Object.hasOwn(uiFiles, url.pathname)) file = path.join(ROOT, 'desktop', 'ui', uiFiles[url.pathname]);
       else if (url.pathname.startsWith('/assets/')) {
@@ -171,5 +186,5 @@ export function createDispatcher({ dataDir = DATA_HOME, service = null, monitor 
     })();
     return closeJob;
   }
-  return { dispatch, whale, watcher, close };
+  return { dispatch, whale, watcher, close, host, apiModels, displayMode, stateFile, settings: null };
 }

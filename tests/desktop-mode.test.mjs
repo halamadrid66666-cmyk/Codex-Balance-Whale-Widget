@@ -38,7 +38,13 @@ function mainModeFixture() {
   visibilityController: { requestRecovery: () => calls.push('recover'), observeNativeVisibility: () => false }
  };
  vm.createContext(state);
- vm.runInContext(source.slice(source.indexOf('async function setHost('), source.indexOf('async function importLegacyStorage(')) + source.slice(source.indexOf('function setMode('), source.indexOf('function updateTray(')), state);
+ // setHost 用到一串抽出来的边界辅助函数（workAreaFor / clampToWorkArea /
+// setWindowBounds）。切片起点必须从其中最早的一个开始，否则在 vm 里会报
+// is not defined。取所有候选里最靠前的位置，将来再抽新函数也不会漏。
+const boundsStart = ['function workAreaFor(', 'function clampToWorkArea(', 'function setWindowBounds(', 'async function setHost(']
+  .map(marker => source.indexOf(marker))
+  .filter(at => at >= 0);
+vm.runInContext(source.slice(Math.min(...boundsStart), source.indexOf('async function importLegacyStorage(')) + source.slice(source.indexOf('function setMode('), source.indexOf('function updateTray(')), state);
  return { state, calls, host: patch => state.setHost({ hostAlive: true, hostPid: 1, window: '1', visible: true, attached: true, nativeFollowing: true, mode: 'follow-codex', ...patch }) };
 }
 

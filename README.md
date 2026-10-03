@@ -8,6 +8,10 @@
 
 这个版本的重点是 **Codex Plus 订阅额度**：鲸鱼跟随 Codex 窗口，点击后显示五小时额度、每周额度、各自剩余百分比和重置倒计时。API 余额与本地账本仍完整保留，并放在独立模式中，不会把订阅额度、API 余额和本机 token 混为一谈。
 
+## 本分支设置优化文档
+
+`对话框优化` 分支已完成设置优化的第一阶段：鲸鱼上的一级菜单精简为七项常用操作，复杂项移入一个独立的「大肥鱼设置」窗口（六个分类，每个设置都有可点击的 `!` 说明）。需要画布的复杂编辑器（气泡内容、吸附、素材、音频）仍需在鲸鱼自身的弹层里细调。后续 Agent 请先读 [实施任务书](docs/SETTINGS-TASKBOOK.md)（含当前实施状态）、[设置优化方案](docs/SETTINGS-UX.md)、[配置索引](docs/CONFIGURATION.md) 和 [验证报告](docs/SETTINGS-VERIFICATION.md)。项目工作约定见 [AGENTS.md](AGENTS.md)。
+
 ## 主要功能
 
 ### Codex 订阅额度
@@ -214,6 +218,10 @@ python scripts/build-release.py --release-tag codex-v0.3.0-fixed.3
 
 ## 文档
 
+- [设置优化验证报告](docs/SETTINGS-VERIFICATION.md)
+- [设置配置索引与 Agent 修改约定](docs/CONFIGURATION.md)
+- [设置优化方案](docs/SETTINGS-UX.md)
+- [设置实施任务书](docs/SETTINGS-TASKBOOK.md)
 - [Codex 额度 DIY 说明](docs/CODEX-QUOTA-DIY.md)
 - [DSH 原版功能逐项对照](docs/ORIGINAL-FEATURE-AUDIT.md)
 - [开发摘要](docs/DEVELOPMENT_SUMMARY.md)

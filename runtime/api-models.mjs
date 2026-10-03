@@ -107,6 +107,11 @@ export class ApiModelRegistry {
       const mode=manual.mode==='auto'?'auto':'manual',period=['daily','weekly'].includes(manual.period)?manual.period:'none';
       model.manualQuota={remaining,total,resetsAt:new Date(reset).toISOString(),observedAt:Date.now(),mode,period,baseAt:manual.resetBase?Date.now():current.manualQuota?.baseAt||Date.now()};
     }
+    // An explicit null or empty object clears the manual quota. The editor
+    // sends null when the field is emptied, and that used to leave the stored
+    // quota in place without any error, so the form looked saved but the old
+    // number kept showing.
+    else if(Object.hasOwn(input,'manualQuota'))delete model.manualQuota;
     // A template credential is allowed only at its fixed provider origin. A
     // custom endpoint must use a separately named credential or be keyless.
     const builtIn=t.balance?.url||t.quota?.url||t.probeUrl;

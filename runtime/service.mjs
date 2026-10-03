@@ -139,7 +139,15 @@ export class WhaleService {
   readUsageSettings() {
     const saved = readJson(this.usageSettingsFile, {});
     const defaults = usageDefaults();
-    defaults.alert.lines.find(line => line.type === 'link').url = this.config.resolve().dashboardUrl;
+    // Point the default dashboard link at the configured provider, but never
+    // fail the whole read when the config is not resolvable yet and never
+    // replace the link with an empty value. A user who saved their own
+    // alert.lines keeps it, because the saved array replaces the default one.
+    try {
+      const link = defaults.alert.lines.find(line => line && line.type === 'link');
+      const dashboard = this.config.resolve().dashboardUrl;
+      if (link && dashboard) link.url = dashboard;
+    } catch { /* 配置未就绪时保留默认占位链接 */ }
     for (const key of Object.keys(defaults)) defaults[key] = { ...defaults[key], ...saved[key] };
     delete defaults.outcomeNotice;
     return defaults;
@@ -147,7 +155,16 @@ export class WhaleService {
   writeUsageSettings(patch) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('用量设置格式无效');
     const result = this.readUsageSettings();
-    for (const key of Object.keys(result)) if (patch[key] && typeof patch[key] === 'object') result[key] = { ...result[key], ...patch[key] };
+    for (const key of Object.keys(result)) {
+      // A domain is only replaced by a plain object. null is the one explicit
+      // way to say "drop my changes for this domain"; it used to be silently
+      // ignored, which made a cleared setting look like it had been saved.
+      if (!Object.hasOwn(patch, key)) continue;
+      const value = patch[key];
+      if (value === null) { result[key] = usageDefaults()[key]; continue; }
+      if (typeof value !== 'object' || Array.isArray(value)) throw new Error('提醒设置「' + key + '」格式无效');
+      result[key] = { ...result[key], ...value };
+    }
     for (const [key, field] of [['alert', 'below'], ['budget', 'amount']]) if (!Number.isFinite(Number(result[key][field])) || Number(result[key][field]) < 0) throw new Error('提醒阈值须为非负数字');
     writeJson(this.usageSettingsFile, result);
     return { ok: true, settings: result };

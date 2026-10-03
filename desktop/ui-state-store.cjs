@@ -31,5 +31,28 @@ class UiStateStore {
     });
     return this.writes;
   }
+  // Keyed update. set() replaces the whole document, so two renderers each
+  // holding a stale snapshot would drop each other's keys; the settings window
+  // and the quick menu write through this instead.
+  setKeys(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+    const accepted = {};
+    for (const [key, value] of Object.entries(input)) {
+      if (!/^dshw[-v]/.test(key)) continue;
+      if (value === null) { accepted[key] = null; continue; }
+      if (typeof value === 'string' && value.length < 1024 * 1024) accepted[key] = value;
+    }
+    const next = { ...this.value };
+    let changed = false;
+    for (const [key, value] of Object.entries(accepted)) {
+      if (value === null) { if (Object.hasOwn(next, key)) { delete next[key]; changed = true; } continue; }
+      if (next[key] !== value) { next[key] = value; changed = true; }
+    }
+    if (!changed) return {};
+    this.value = next; this.encoded = JSON.stringify(next); this.dirty = true;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => { this.flush().catch(() => {}); }, 150);
+    return accepted;
+  }
 }
 module.exports = { UiStateStore };
