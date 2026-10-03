@@ -37,22 +37,44 @@ export function findCodexExecutable(env = process.env) {
   return 'codex';
 }
 
-export function readCodexRateLimits({ codexHome, executable = findCodexExecutable(), timeoutMs = 6000, spawnImpl = spawn, signal } = {}) {
+// codex-cli 0.120.0 起 `app-server --stdio` 被移除，换成了 `--listen stdio://`
+// （stdio 本身就是默认值）。旧写法会让 CLI 直接报 unexpected argument 并以
+// 退出码 2 结束，表现为额度永远读不出来。这里按顺序尝试各写法，命中就记住，
+// 避免每次刷新都先白起一次进程。
+const APP_SERVER_ARG_FORMS = [
+  ['app-server', '--listen', 'stdio://'],
+  ['app-server', '--stdio'],
+];
+// executable -> 已验证可用的写法下标。codex 升级后自然失效并重新探测。
+const workingArgs = new Map();
+
+// 只有「CLI 拒绝了参数」才值得换写法重试。没登录、网络不通这类真实失败
+// 重试只会白等一个完整超时，所以按 stderr 特征精确区分。
+function looksLikeArgsRejected(stderr) {
+  return /unexpected argument|unrecognized (?:option|argument)|unknown option|invalid value .* for/i.test(String(stderr || ''));
+}
+
+function readRateLimitsOnce({ codexHome, executable, timeoutMs, spawnImpl, signal }, argsIndex) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error('Codex 额度查询已取消'));
-    const child = spawnImpl(executable, ['app-server', '--stdio'], {
-      windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
+    let stderr = '';
+    const child = spawnImpl(executable, APP_SERVER_ARG_FORMS[argsIndex], {
+      windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
       env: codexHome ? { ...process.env, CODEX_HOME: codexHome } : process.env,
     });
+    if (child.stderr && typeof child.stderr.on === 'function') {
+      child.stderr.setEncoding?.('utf8');
+      child.stderr.on('data', chunk => { if (stderr.length < 4096) stderr += chunk; });
+    }
     let settled = false, buffer = '';
-    const finish = (error, value) => {
+    const finish = (error, value, meta) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
       signal?.removeEventListener('abort', onAbort);
       child.stdin.destroy();
       child.kill();
-      if (error) reject(error); else resolve(value);
+      if (error) { if (meta) error.argsRejected = meta.argsRejected; reject(error); } else resolve(value);
     };
     const send = message => { if (!settled && child.stdin.writable) child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n'); };
     const onAbort = () => finish(new Error('Codex 额度查询已取消'));
@@ -61,7 +83,11 @@ export function readCodexRateLimits({ codexHome, executable = findCodexExecutabl
     signal?.addEventListener('abort', onAbort, { once: true });
     child.once('error', error => finish(error));
     child.stdin.on('error', error => finish(error));
-    child.once('close', () => finish(new Error('Codex 额度查询已结束')));
+    child.once('close', () => {
+      const rejected = looksLikeArgsRejected(stderr);
+      // finish 的签名是 (error, value, meta)，meta 必须在第三位。
+      finish(new Error(rejected ? 'Codex 额度查询参数不被当前版本支持' : 'Codex 额度查询已结束'), undefined, { argsRejected: rejected });
+    });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', chunk => {
       buffer += chunk;
@@ -87,3 +113,36 @@ export function readCodexRateLimits({ codexHome, executable = findCodexExecutabl
     } } });
   });
 }
+
+export async function readCodexRateLimits(options = {}) {
+  // 旧签名里的默认值随解构一起去掉了，这里补回来。
+  const executable = options.executable ?? findCodexExecutable();
+  const resolved = {
+    codexHome: options.codexHome,
+    executable,
+    timeoutMs: options.timeoutMs ?? 6000,
+    spawnImpl: options.spawnImpl ?? spawn,
+    signal: options.signal,
+  };
+  const known = workingArgs.get(executable);
+  const order = known == null
+    ? APP_SERVER_ARG_FORMS.map((_, index) => index)
+    : [known, ...APP_SERVER_ARG_FORMS.map((_, index) => index).filter(index => index !== known)];
+  let lastError;
+  for (const index of order) {
+    try {
+      const value = await readRateLimitsOnce(resolved, index);
+      workingArgs.set(executable, index);
+      return value;
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      // 参数被拒才换下一种写法；其它失败原样抛出，避免白等一个完整超时。
+      if (!error?.argsRejected) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error('Codex 额度不可用');
+}
+
+// 仅供测试：清掉「哪种写法可用」的缓存。
+export function resetCodexRateLimitsArgsCache() { workingArgs.clear(); }

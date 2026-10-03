@@ -72,9 +72,9 @@ html.desktop.dshw-shape-round{--dshw-box-wu:655;--dshw-box-hu:325;--dshw-card-wu
   box-sizing:border-box;
   display:grid!important;
   grid-template-rows:auto auto auto;
-  gap:calc(var(--dshw-u) * 14);
+  gap:calc(var(--dshw-u) * 18);
   width:100%;
-  min-height:calc(var(--dshw-u) * 190);
+  min-height:calc(var(--dshw-u) * 236);
   padding:calc(var(--dshw-u) * 20) calc(var(--dshw-u) * 26)!important;
   overflow:visible;
   border:calc(var(--dshw-u) * 5) solid var(--quota-line);
@@ -121,17 +121,19 @@ html.desktop.dshw-shape-round{--dshw-box-wu:655;--dshw-box-hu:325;--dshw-card-wu
 }
 /* The ellipse leaves a narrow card, where the label and the value cannot share
    a line. The rounded shape has room, so it keeps them side by side. */
-html.desktop:not(.dshw-shape-round) .desktop .dshwv-quota-meter-head,
-html.desktop:not(.dshw-shape-round) .dshwv-quota-meter-head{
+/* 标签与数值上下排列，两种形状一致。原先只有椭圆这样排、圆角并排，那是
+   字号还小的时候；放大后并排放不下，圆角就会把「5 小时」拆成「5 小」「时」。 */
+.desktop .dshwv-quota-meter-head{
   display:grid;
   justify-items:start;
   gap:calc(var(--dshw-u) * 5);
 }
-html.desktop:not(.dshw-shape-round) .dshwv-quota-meter-value{justify-self:start}
+.desktop .dshwv-quota-meter-value{justify-self:start;min-height:calc(var(--dshw-u) * 34)}
 .desktop .dshwv-quota-meter-label{
   font-size:calc(var(--dshw-u) * 55);
   font-weight:700;
   letter-spacing:.02em;
+  white-space:nowrap;
 }
 .desktop .dshwv-quota-meter-value{
   display:inline-flex;
@@ -154,7 +156,7 @@ html.desktop:not(.dshw-shape-round) .dshwv-quota-meter-value{justify-self:start}
   position:relative;
   display:block;
   width:100%;
-  height:calc(var(--dshw-u) * 22);
+  height:calc(var(--dshw-u) * 26);
   overflow:visible;
   border-radius:999px;
   background:color-mix(in srgb,var(--quota-accent) 14%,white);
@@ -188,8 +190,8 @@ html.desktop:not(.dshw-shape-round) .dshwv-quota-meter-value{justify-self:start}
   line-height:1.05;
 }
 .desktop .dshwv-quota-meter-reset-label{
-  margin-right:calc(var(--dshw-u) * 14);
-  opacity:.8;
+  opacity:.75;
+  font-size:calc(var(--dshw-u) * 40);
 }
 .desktop .dshwv-quota-meter-reset{
   min-width:0;
@@ -199,12 +201,13 @@ html.desktop:not(.dshw-shape-round) .dshwv-quota-meter-value{justify-self:start}
   white-space:nowrap;
 }
 /* Narrow cards stack the reset label above the countdown, as the head does. */
-html.desktop:not(.dshw-shape-round) .dshwv-quota-meter-foot{
+/* 底部同样上下排：「重置」和「等待同步」并排会被挤成「重」「置」两行。 */
+.desktop .dshwv-quota-meter-foot{
   display:grid;
   justify-items:start;
   gap:calc(var(--dshw-u) * 3);
 }
-html.desktop:not(.dshw-shape-round) .dshwv-quota-meter-reset{text-align:left}
+.desktop .dshwv-quota-meter-reset{text-align:left}
 /* A hairline in the gap between the two gauges so they read as separate units. */
 .desktop .dshwv-text .dshwv-trowline .dshwv-quota-shell{position:relative}
 .desktop .dshwv-text .dshwv-trowline .dshwv-quota-shell + .dshwv-quota-shell::before{

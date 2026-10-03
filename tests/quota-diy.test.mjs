@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
-import { quotaFromAppServer, readCodexRateLimits } from '../runtime/codex-rate-limits.mjs';
+import { quotaFromAppServer, readCodexRateLimits, resetCodexRateLimitsArgsCache } from '../runtime/codex-rate-limits.mjs';
 
 const source = await fs.readFile(new URL('../desktop/ui/quota.js', import.meta.url), 'utf8');
 const context = { module: { exports: {} } };
@@ -79,7 +79,8 @@ test('direct Codex reader initializes app-server and requests rate limits withou
   const sent = [];
   function spawnImpl(executable, args, options) {
     assert.equal(executable, 'mock-codex');
-    assert.deepEqual(args, ['app-server', '--stdio']);
+    // codex-cli 0.120.0 起 --stdio 已被移除，现在先试 --listen stdio://。
+    assert.deepEqual(args, ['app-server', '--listen', 'stdio://']);
     assert.equal(options.env.CODEX_HOME, 'C:/test-codex-home');
     const child = new EventEmitter();
     child.stdout = new PassThrough();
@@ -100,4 +101,66 @@ test('direct Codex reader initializes app-server and requests rate limits withou
   assert.equal(result.windows[0].remainingPercent, 60);
   assert.deepEqual(sent.map(message => message.method), ['initialize', 'initialized', 'account/rateLimits/read']);
   assert.ok(sent.every(message => !/login|token|secret/i.test(JSON.stringify(message))));
+});
+
+test('a Codex build that rejects --listen falls back to the legacy --stdio form', async () => {
+  resetCodexRateLimitsArgsCache();
+  const attempts = [];
+  function spawnImpl(executable, args) {
+    attempts.push(args);
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => { child.emit('close', 0); return true; };
+    child.stdin = new Writable({ write(chunk, _encoding, done) {
+      const message = JSON.parse(String(chunk));
+      if (args.includes('--stdio')) {
+        // 旧写法：正常回数据。
+        if (message.method === 'initialize') queueMicrotask(() => child.stdout.write(JSON.stringify({ id: 1, result: {} }) + '\n'));
+        if (message.method === 'account/rateLimits/read') queueMicrotask(() => child.stdout.write(JSON.stringify({ id: 2, result: { rateLimits: {
+          primary: { windowDurationMins: 300, usedPercent: 40, resetsAt: Math.ceil(Date.now() / 1000) + 3600 },
+        } } }) + '\n'));
+      } else {
+        // 新写法在这个「旧版本」上被拒。
+        queueMicrotask(() => { child.stderr.write("error: unexpected argument '--listen' found\n"); child.emit('close', 2); });
+      }
+      done();
+    } });
+    return child;
+  }
+  const result = await readCodexRateLimits({ codexHome: 'C:/test-codex-home', executable: 'legacy-mock-codex', spawnImpl });
+  assert.equal(result.windows[0].usedPercent, 40, '回退后应拿到额度');
+  assert.equal(attempts.length, 2, '应先试新写法再回退（实际 ' + attempts.length + ' 次）');
+  assert.deepEqual(attempts[0], ['app-server', '--listen', 'stdio://']);
+  assert.deepEqual(attempts[1], ['app-server', '--stdio']);
+
+  // 记住可用的写法，第二次不再白试新写法。
+  const before = attempts.length;
+  await readCodexRateLimits({ codexHome: 'C:/test-codex-home', executable: 'legacy-mock-codex', spawnImpl });
+  assert.equal(attempts.length, before + 1, '命中缓存后应只起一次进程');
+  resetCodexRateLimitsArgsCache();
+});
+
+test('a genuine failure is not retried with the other argument form', async () => {
+  resetCodexRateLimitsArgsCache();
+  let attempts = 0;
+  function spawnImpl(executable, args) {
+    attempts++;
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => { child.emit('close', 1); return true; };
+    child.stdin = new Writable({ write(_chunk, _encoding, done) {
+      // 没有「参数被拒」的特征，只是没登录 / 起不来，不该换写法重试。
+      queueMicrotask(() => child.emit('close', 1));
+      done();
+    } });
+    return child;
+  }
+  await assert.rejects(
+    readCodexRateLimits({ codexHome: 'C:/test-codex-home', executable: 'broken-codex', spawnImpl }),
+    /Codex 额度查询已结束/,
+  );
+  assert.equal(attempts, 1, '非参数类失败不应重试（实际 ' + attempts + ' 次）');
+  resetCodexRateLimitsArgsCache();
 });
