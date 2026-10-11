@@ -2,14 +2,8 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
 import { domainError } from '../lib/errors.mjs';
-
-// lib/fs-atomic.cjs is the project's only atomic-write implementation; ESM
-// modules load it through createRequire because the Electron side needs it
-// synchronously from CommonJS.
-const require = createRequire(import.meta.url);
-const { atomicWriteSync } = require('../lib/fs-atomic.cjs');
+import { writeFileAtomicSync } from '../lib/atomic-write.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -40,7 +34,7 @@ export function readJson(file, fallback) {
 }
 
 export function writeJson(file, data, { fs: fileSystem = fs } = {}) {
-  atomicWriteSync(file, JSON.stringify(data, null, 2), { fs: fileSystem });
+  writeFileAtomicSync(file, JSON.stringify(data, null, 2), { fs: fileSystem });
 }
 
 // Accounting days are anchored to UTC+8 rather than the host timezone. That
