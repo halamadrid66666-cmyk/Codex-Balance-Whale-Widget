@@ -2,6 +2,7 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, globalShor
 const path = require('node:path');
 const fs = require('node:fs');
 const { UiStateStore } = require('./ui-state-store.cjs');
+const { writeJsonSync } = require('../lib/fs-atomic.cjs');
 const { shutdownCompanion } = require('./lifecycle.cjs');
 const { externalWebUrl } = require('./external-links.cjs');
 const { syncNativeViewport } = require('./native-viewport.cjs');
@@ -51,7 +52,10 @@ let hostSequence = -1;
 let appliedNativeSize = '';
 const stateFile = path.join(dataDir, 'ui-state.json');
 const read = (f, fallback = {}) => { try { return JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, '')); } catch { return fallback; } };
-const save = (file, value) => { const temp = file + '.' + process.pid + '.tmp'; fs.writeFileSync(temp, JSON.stringify(value, null, 2)); fs.renameSync(temp, file); };
+// Same atomic primitive the service uses. This used to be a weaker local copy
+// (fixed temp name, no exclusive create, no retry), which is the wrong trade for
+// the state files that have to survive a crash.
+const save = (file, value) => writeJsonSync(file, value);
 let desktopMode = read(path.join(dataDir, 'follow-config.json')).mode === 'standalone' ? 'standalone' : 'follow-codex';
 let desktopBoundsApplied = false, modePending = false;
 let recoveryAttempts = 0, recoveryTimer = null, readyTimer = null;

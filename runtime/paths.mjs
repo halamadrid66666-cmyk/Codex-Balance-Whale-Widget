@@ -1,11 +1,32 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
-export const VERSION = '0.3.0';
+// lib/fs-atomic.cjs is the project's only atomic-write implementation; ESM
+// modules load it through createRequire because the Electron side needs it
+// synchronously from CommonJS.
+const require = createRequire(import.meta.url);
+const { atomicWriteSync } = require('../lib/fs-atomic.cjs');
+
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// The release manifest owns the version. `.codex-plugin/plugin.json` carries the
+// install identity the launchers compare — base version plus an optional
+// `+codex.<build>` suffix — so the base is derived from it rather than repeated
+// here, where a second literal could drift from it unnoticed. package.json keeps
+// its own copy for npm metadata; tests/release-version.test.mjs asserts the two
+// agree so a bump in one place cannot land half-applied.
+function baseVersion() {
+  try {
+    const raw = fs.readFileSync(path.join(ROOT, '.codex-plugin', 'plugin.json'), 'utf8').replace(/^\uFEFF/, '');
+    const base = String(JSON.parse(raw).version || '').split('+')[0].trim();
+    if (/^\d+\.\d+\.\d+/.test(base)) return base;
+  } catch {}
+  return '0.0.0';
+}
+export const VERSION = baseVersion();
 export const CODEX_HOME = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
 export const DATA_HOME = path.resolve(process.env.WHALE_HOME || path.join(CODEX_HOME, 'whale-widget'));
 
@@ -18,29 +39,18 @@ export function readJson(file, fallback) {
 }
 
 export function writeJson(file, data, { fs: fileSystem = fs } = {}) {
-  const encoded = JSON.stringify(data, null, 2);
-  fileSystem.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = file + '.' + process.pid + '.' + randomBytes(6).toString('hex') + '.tmp';
-  let descriptor, created = false;
-  try {
-    descriptor = fileSystem.openSync(temp, 'wx', 0o600); created = true;
-    fileSystem.writeFileSync(descriptor, encoded);
-    fileSystem.closeSync(descriptor); descriptor = undefined;
-    // Antivirus/indexing may briefly deny replacement on Windows. Retry only
-    // these sharing/access failures, with no sleep or deletion of the target.
-    for (let attempt = 0; ; attempt++) {
-      try { fileSystem.renameSync(temp, file); break; }
-      catch (error) { if (attempt >= 2 || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error; }
-    }
-  } catch (error) {
-    if (descriptor !== undefined) { try { fileSystem.closeSync(descriptor); } catch {} }
-    if (created) { try { fileSystem.unlinkSync(temp); } catch {} }
-    throw error;
-  }
+  atomicWriteSync(file, JSON.stringify(data, null, 2), { fs: fileSystem });
 }
 
+// Accounting days are anchored to UTC+8 rather than the host timezone. That
+// boundary is already baked into every ledger written so far, so re-deriving it
+// under a different one would silently re-bucket history; the offset is named
+// and exported so callers can do day arithmetic in the same frame instead of
+// mixing it with local-time Date methods.
+export const DAY_OFFSET_MS = 8 * 3600000;
+export const DAY_MS = 86400000;
 export function dayKey(ts = Date.now()) {
-  return new Date(Number(ts) + 8 * 3600000).toISOString().slice(0, 10);
+  return new Date(Number(ts) + DAY_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 export const rounded = n => Math.round((Number(n) + Number.EPSILON) * 1e8) / 1e8;

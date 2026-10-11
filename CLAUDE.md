@@ -6,7 +6,7 @@ Codex 桌面额度小鲸鱼：跟随 Codex 窗口的桌面挂件（Electron + No
 
 - 需要 Node.js 24+。
 - `npm start` 启动挂件（= `node scripts/control.mjs open`）；`npm run desktop` 为独立桌面模式。
-- 测试：`npm test`（= `node --test tests/*.test.mjs`）。
+- 测试：`npm test`（= `node --test tests/*.test.mjs`）。`tests/lint-rules.test.mjs` 会 import ESLint，所以新克隆要先 `npm ci`，否则它是唯一会失败的那一个文件。
 - 静态检查：`npm ci` 一次性装好 devDependency（只有 ESLint），然后 `npm run lint`、`npm run check:package`、`npm run check:architecture`；`npm run verify` 串起全部检查加发布包构建。
 - 自检：`node scripts/control.mjs status | balance | usage | stop`。
 
@@ -17,8 +17,9 @@ Codex 桌面额度小鲸鱼：跟随 Codex 窗口的桌面挂件（Electron + No
 - `scripts/control.mjs` — CLI 入口
 - `runtime/dispatcher.mjs` — 中央路由，组装所有子服务
 - `runtime/service.mjs` — WhaleService：余额、配置、账本
-- `runtime/bridge.mjs` — 具名管道 IPC（含路径白名单与 token 校验）
+- `runtime/bridge.mjs` — 具名管道 IPC（`ALLOWED` 与 `HOST_ROUTES` 两张表合起来才是完整的外部可达路径集）
 - `runtime/process.mjs` — 拉起/探测服务（Windows schtasks，macOS launchctl）
+- `lib/fs-atomic.cjs` — 全项目唯一的原子写入实现（独占临时文件 + fsync + Windows 重命名重试）。`lib/` 是最底层，`runtime/` 与 `desktop/` 都依赖它；它是 CJS 因为 Electron 侧需要同步原语
 - `lib/widget-host.mjs` — 挂件资源层，注册全部 `/dsh-whale/*` 路由
 - `desktop/main.cjs` — Electron 主进程：窗口、透明度、点击穿透、跟随
 - `desktop/ui/*` — 渲染进程页面与模块
@@ -53,6 +54,7 @@ Codex 桌面额度小鲸鱼：跟随 Codex 窗口的桌面挂件（Electron + No
 - **`assets/whale-widget.js` 现在是装配入口，不再是单体**：约 6,445 行 / 264 KB，只占第一方源码的三成；气泡、用量、角色、音效等实现已迁到 `desktop/ui/features/**`（36 个模块）与 `desktop/ui/services/**`（2 个共享模块）。文件顶部保留分段索引，先 `grep -n "==== \[" assets/whale-widget.js` 取区段行号再定点读。**改某个功能前先确认它是否已经迁出**——留在这里的多半只剩 DOM 装配和兼容适配。
 - **挂件样式在 `desktop/ui/whale-widget.css`**，由 `widget.html` 以 `<link>` 加载。改外观不必碰 whale-widget.js。
 - **API 模型模板只有一份**：34 个服务商模板全部定义在 `runtime/api-models.mjs` 的 `API_TEMPLATES`，经 `/api/models` 下发给前端。`desktop/ui/api-models.js` 只渲染后端返回的数据，自身不含模板表 —— 要加服务商，只改后端那个文件。
+- **版本号只有一处真源**：`.codex-plugin/plugin.json` 的 `version`（`基础版本+构建后缀`，安装器比对的就是它）。`runtime/paths.mjs` 从它推导出 `VERSION`，不再自带字面量；`package.json` 仍留一份给 npm，由 `tests/release-version.test.mjs` 断言与真源一致。发版只改 plugin.json 一处，改了 package.json 忘了同步会被测试拦下。
 - **隐私**：API 密钥、提供商名称、账号、本机路径、会话日志不得出现在公开仓库、UI 或日志里。
 - **新增根目录文件必须同步加进 `scripts/build-release.py` 的 `root_files`**，否则 `python scripts/build-release.py` 会以 `Unexpected file: <名字>` 断言失败。`.github/workflows/verify.yml` 会在 push/PR 上跑这道检查，所以忘了登记会在 CI 上直接红，不必等到打包。
 - `vendor/`（smol-toml，运行时依赖，进发布包）与 `archive/`（0.2.x 归档，不进发布包）是第三方或历史产物，一般不动。历史发布包只放 Release 页，已不再提交进仓库（`.gitignore` 含 `/packages/`）。

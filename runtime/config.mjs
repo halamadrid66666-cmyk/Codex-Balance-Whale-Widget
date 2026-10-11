@@ -37,6 +37,10 @@ function numberIn(value, min, max, label) {
   return n;
 }
 
+function fileStamp(file) {
+  try { return fs.statSync(file).mtimeMs; } catch { return 0; }
+}
+
 export function validateConfig(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('设置必须是 JSON 对象');
   const c = structuredClone(DEFAULT_CONFIG);
@@ -79,8 +83,26 @@ export class ConfigStore {
   constructor({ dataDir = DATA_HOME, codexHome = CODEX_HOME, env = process.env } = {}) {
     this.dataDir = dataDir; this.codexHome = codexHome; this.env = env;
     this.file = path.join(dataDir, 'api-settings.json');
+    // resolve() reads four files, parses TOML and hashes the credential. It runs
+    // on the session monitor's tick and on every usage request, so its result is
+    // memoised until one of those inputs actually changes. Writes through save()
+    // invalidate explicitly; edits made outside this process are caught by the
+    // mtime fingerprint.
+    this.settingCache = null;
+    this.resolveCache = null;
+    this.usedEnvNames = [];
   }
-  load() { return validateConfig(readJson(this.file, DEFAULT_CONFIG)); }
+
+  invalidate() { this.settingCache = null; this.resolveCache = null; }
+
+  load() {
+    const stamp = fileStamp(this.file);
+    if (this.settingCache && this.settingCache.stamp === stamp) return this.settingCache.value;
+    const value = validateConfig(readJson(this.file, DEFAULT_CONFIG));
+    this.settingCache = { stamp, value };
+    return value;
+  }
+
   save(patch) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('设置必须是 JSON 对象');
     if (Object.keys(patch).some(k => /secret|token|api.?key|password/i.test(k) && k !== 'keyEnv')) throw new Error('请填写密钥环境变量名；插件设置中不保存密钥');
@@ -93,8 +115,11 @@ export class ConfigStore {
       else input.models[update.model] = update.prices;
     }
     const c = validateConfig(input);
-    writeJson(this.file, c); return c;
+    writeJson(this.file, c);
+    this.invalidate();
+    return c;
   }
+
   settingsInfo() {
     const current = this.load(), settings = {}, configured = {};
     for (const key of Object.keys(DEFAULT_CONFIG)) {
@@ -103,8 +128,32 @@ export class ConfigStore {
     }
     return { settings, configured };
   }
+
   resolve() {
+    const key = this.cacheKey();
+    if (this.resolveCache && this.resolveCache.key === key) return this.resolveCache.value;
+    const value = this.resolveUncached();
+    this.resolveCache = { key, value };
+    return value;
+  }
+
+  // Every input resolve() reads, plus the environment variables it consulted on
+  // the previous run. A changed config.toml alters the mtime even when it only
+  // introduces a new env_key, so the memorised name list cannot go stale.
+  cacheKey() {
+    const parts = [fileStamp(this.file), fileStamp(path.join(this.codexHome, 'config.toml')), fileStamp(path.join(this.codexHome, 'auth.json'))];
+    let projectDir = '';
+    try { projectDir = this.load().projectDir; } catch {}
+    if (projectDir) parts.push(fileStamp(path.join(path.resolve(projectDir), '.codex', 'config.toml')));
+    for (const name of ['CODEX_PROFILE', 'OPENAI_BASE_URL', 'OPENAI_API_KEY']) parts.push(name, this.env[name] ?? '');
+    for (const name of this.usedEnvNames) parts.push(name, this.env[name] ?? '');
+    return parts.join('\u0000');
+  }
+
+  resolveUncached() {
     const setting = this.load();
+    const seen = [];
+    const envOf = name => { if (name) seen.push(name); return name ? this.env[name] : undefined; };
     const file = path.join(this.codexHome, 'config.toml');
     let config = {};
     if (fs.existsSync(file)) {
@@ -139,7 +188,8 @@ export class ConfigStore {
     if (!setting.keyEnv && new URL(baseUrl).origin !== new URL(originalBase).origin) throw new Error('更换 API 域名时请指定该服务自己的密钥环境变量，不能复用原服务密钥');
     let key = '', keySource = 'none';
     const envName = setting.keyEnv || provider.env_key || '';
-    if (envName && this.env[envName]) { key = this.env[envName]; keySource = 'environment'; }
+    const configuredKey = envOf(envName);
+    if (envName && configuredKey) { key = configuredKey; keySource = 'environment'; }
     else if (!setting.keyEnv && provider.experimental_bearer_token) { key = provider.experimental_bearer_token; keySource = 'codex-provider'; }
     else if (!setting.keyEnv && !provider.env_key) {
       if (this.env.OPENAI_API_KEY) { key = this.env.OPENAI_API_KEY; keySource = 'environment'; }
@@ -154,6 +204,9 @@ export class ConfigStore {
     const host = new URL(baseUrl).hostname;
     const providerName = '当前 API';
     const dashboardUrl = setting.dashboardUrl || (host === 'api.openai.com' ? 'https://platform.openai.com/settings/organization/billing/overview' : new URL(baseUrl).origin);
+    // Remember which environment names this resolution consulted so the next
+    // cacheKey() can tell whether any of their values changed.
+    this.usedEnvNames = seen;
     return { setting, id, model: effective.model || '', profileName, providerName, baseUrl, key, keySource, accountId, dashboardUrl };
   }
   publicInfo() {
