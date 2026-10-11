@@ -7,11 +7,11 @@ const { shutdownCompanion } = require('./lifecycle.cjs');
 const { externalWebUrl } = require('./external-links.cjs');
 const { syncNativeViewport } = require('./native-viewport.cjs');
 const { createHeartbeatMonitor } = require('./heartbeat.cjs');
-const { acceptsWindowMessage } = require('./ipc-window.cjs');
+const { registerIpcHandlers } = require('./ipc-handlers.cjs');
 const { validateWindowShape, EMPTY_SHAPE } = require('./window-shape.cjs');
 const { createVisibilityController } = require('./visibility.cjs');
 const { normalizeHostState, parseInitialHostState } = require('./host-state.cjs');
-const { createVisibilityRecorder } = require('./visibility-recorder.cjs');
+const { createDiagnostics } = require('./diagnostics.cjs');
 const { pathToFileURL } = require('node:url');
 const root = path.resolve(__dirname, '..');
 const dataDir = process.argv.find(a => a.startsWith('--whale-data='))?.slice(13);
@@ -59,23 +59,32 @@ const save = (file, value) => writeJsonSync(file, value);
 let desktopMode = read(path.join(dataDir, 'follow-config.json')).mode === 'standalone' ? 'standalone' : 'follow-codex';
 let desktopBoundsApplied = false, modePending = false;
 let recoveryAttempts = 0, recoveryTimer = null, readyTimer = null;
-const visibilityHistory = [];
-let diagnosticShortcutRegistered = false, lastDiagnosticReport = null;
-const visibilityRecorder = createVisibilityRecorder({
-  read: () => {
-    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return null;
-    return { ready: rendererReady, visible: window.isVisible(), manuallyHidden, desktopMode,
-      hostAlive: !!lastHost?.hostAlive, hostVisible: !!lastHost?.visible, modal: !!lastHost?.modal,
-      native: lastHost?.visualDiagnostics || null, bounds: window.getBounds(),
-      shape: windowShape, shapeError: !!windowShapeError, inputEnabled,
-      visibility: visibilityController.snapshot(), recoveryAttempts, presents, nativeOcclusionDisabled };
+let diagnosticShortcutRegistered = false;
+const diagnostics = createDiagnostics({
+  dataDir, save,
+  // Every field belongs to this process's live state, so the main process hands
+  // diagnostics a snapshot rather than the other way round.
+  snapshot: () => {
+    const live = !!window && !window.isDestroyed() && !window.webContents.isDestroyed();
+    return {
+      // Null when there is no window to sample; `entry` is written either way.
+      record: live ? {
+        ready: rendererReady, visible: window.isVisible(), manuallyHidden, desktopMode,
+        hostAlive: !!lastHost?.hostAlive, hostVisible: !!lastHost?.visible, modal: !!lastHost?.modal,
+        native: lastHost?.visualDiagnostics || null, bounds: window.getBounds(),
+        shape: windowShape, shapeError: !!windowShapeError, inputEnabled,
+        visibility: visibilityController.snapshot(), recoveryAttempts, presents, nativeOcclusionDisabled,
+      } : null,
+      entry: {
+        desktopMode, ready: rendererReady, manuallyHidden, recoveryAttempts,
+        hostAlive: !!lastHost?.hostAlive, hostVisible: !!lastHost?.visible, modal: !!lastHost?.modal,
+        attached: !!lastHost?.attached, shapeCount: windowShape?.length || 0,
+      },
+    };
   },
-  write: (name, value) => save(path.join(dataDir, name), value),
 });
-function reportVisibility() {
-  try { lastDiagnosticReport = visibilityRecorder.report(); return lastDiagnosticReport; }
-  catch { return { saved: false }; }
-}
+const diagnose = diagnostics.diagnose;
+const reportVisibility = diagnostics.report;
 const uiStore = new UiStateStore(stateFile);
 const values = () => uiStore.get();
 const storeValues = input => uiStore.set(input);
@@ -144,6 +153,25 @@ function show() {
   visibilityController.requestRecovery();
 }
 function toggle() { if (manuallyHidden) show(); else { manuallyHidden = true; visibility(); } }
+// Renderer finished loading its images and input bindings: clear the recovery
+// timers it may have raced, then hand it the mode it should be showing.
+function markRendererReady() {
+  markStartup('imageAndInputReady');
+  try { fs.rmSync(path.join(dataDir, 'desktop-error.json'), { force: true }); } catch {}
+  clearTimeout(readyTimer); readyTimer = null;
+  clearTimeout(recoveryTimer); recoveryTimer = null;
+  rendererReady = true;
+  diagnose('ready');
+  window.webContents.send('whale-desktop-mode', desktopMode);
+  visibility(); flushCommands(); invalidate(); sendCursor(true);
+}
+function setInteractive(enabled) {
+  // A region-clipped window has no shape to hit-test against until the renderer
+  // has sent one, so it stays non-interactive regardless of what it asks for.
+  if ((usesWindowShape && !windowShape) || enabled === inputEnabled) return;
+  inputEnabled = enabled;
+  window.setIgnoreMouseEvents(!enabled, { forward: !usesWindowShape });
+}
 function sendCommand(command) {
   if (!window || window.isDestroyed() || !command) return false;
   show();
@@ -174,7 +202,7 @@ async function showStatusDialog() {
   });
 }
 function pauseAndQuit() { save(path.join(dataDir, 'pause-until-host-exit.json'), { pauseAll: desktopMode === 'standalone', hostPid: lastHost?.hostPid || 0, hostSession: lastHost?.hostSession || '', hostWindow: lastHost?.window || '0' }); app.quit(); }
-function isMainFrame(event) { if(!acceptsWindowMessage(window,event,quitting))return false;try{return event.senderFrame === window.webContents.mainFrame;}catch{return false;} }
+
 async function openWebLink(value, gestureRequired = true) {
   if (gestureRequired && (!trustedGestureAt || Date.now() - trustedGestureAt > 1000)) return false;
   trustedGestureAt = 0;
@@ -196,7 +224,7 @@ async function setHost(host) {
   if (Number.isSafeInteger(host.serial)) { if (host.serial <= hostSequence) return; hostSequence = host.serial; }
   hostHeartbeat = Date.now(); lastHost = host;
   // Record the observed state before any lifecycle recovery can change it.
-  if (usesWindowShape) { try { visibilityRecorder.sample(); } catch {} }
+  if (usesWindowShape) { try { diagnostics.sample(); } catch {} }
   if (host.monitorExit) { app.quit(); return; }
   sendCursor();
   if (modePending) {
@@ -243,6 +271,29 @@ async function importLegacyStorage() {
   } finally { legacy.destroy(); session.defaultSession.protocol.unhandle('http'); }
 }
 
+// What desktop/ipc-handlers.cjs is allowed to reach. Listing it here keeps the
+// IPC surface auditable in one place instead of implicit in the closures of nine
+// inline handlers.
+const ipcHost = {
+  window: () => window,
+  quitting: () => quitting,
+  storage: () => values(),
+  storeStorage: input => storeValues(input),
+  markGesture: () => { trustedGestureAt = Date.now(); },
+  applyShape: rects => applyWindowShape(rects),
+  rendererReady: markRendererReady,
+  setInteractive,
+  setKeyboardFocus,
+  openExternal: url => openWebLink(url),
+  setMode,
+  desktopMode: () => desktopMode,
+  show,
+  showStatusDialog,
+  pauseAndQuit,
+  resetPosition: () => resetPosition(),
+  sendCommand,
+};
+
 if (!lock) app.quit();
 else {
   app.on('second-instance', show);
@@ -252,7 +303,7 @@ else {
     const { startBridge } = await import(pathToFileURL(path.join(root, 'runtime', 'bridge.mjs')));
     let testOptions = {};
     if (fixture) { const { makeFixture } = await import(pathToFileURL(path.join(root, 'tests', 'desktop-fixture.mjs'))); testOptions = await makeFixture(dataDir); }
-    dispatcher = createDispatcher({ dataDir, fetchImpl: (url, options) => net.fetch(url, options), onStop: pauseAndQuit, onShow: show, statusInfo: () => ({ followCodex: desktopMode !== 'standalone', desktopMode, rendererReady, recoveryAttempts, manuallyHidden, platform: process.platform, followMode: lastHost?.followMode || null, hostPid: lastHost?.hostPid || null, visible: !!window?.isVisible(), modePending, windowShape, windowShapeError, windowBounds: window?.getBounds(), visibility: visibilityController.snapshot(), nativeFollowing: !!lastHost?.nativeFollowing, mouseRouting: { forwardedMouseMoves: !usesWindowShape, cursorPollMs: usesWindowShape ? 16 : 50 }, diagnostics: { shortcutRegistered: diagnosticShortcutRegistered, lastReport: lastDiagnosticReport, native: lastHost?.visualDiagnostics || null }, startup, rendering: gpuStatus }), ...testOptions });
+    dispatcher = createDispatcher({ dataDir, fetchImpl: (url, options) => net.fetch(url, options), onStop: pauseAndQuit, onShow: show, statusInfo: () => ({ followCodex: desktopMode !== 'standalone', desktopMode, rendererReady, recoveryAttempts, manuallyHidden, platform: process.platform, followMode: lastHost?.followMode || null, hostPid: lastHost?.hostPid || null, visible: !!window?.isVisible(), modePending, windowShape, windowShapeError, windowBounds: window?.getBounds(), visibility: visibilityController.snapshot(), nativeFollowing: !!lastHost?.nativeFollowing, mouseRouting: { forwardedMouseMoves: !usesWindowShape, cursorPollMs: usesWindowShape ? 16 : 50 }, diagnostics: { shortcutRegistered: diagnosticShortcutRegistered, lastReport: diagnostics.lastReport(), native: lastHost?.visualDiagnostics || null }, startup, rendering: gpuStatus }), ...testOptions });
     markStartup('dispatcherReady');
     await importLegacyStorage();
     session.defaultSession.protocol.handle('whale', async request => {
@@ -309,39 +360,7 @@ else {
     window.webContents.setWindowOpenHandler(({ url }) => { openWebLink(url).catch(() => {}); return { action: 'deny' }; });
     window.webContents.on('will-navigate', (event, url) => { if (!url.startsWith(UI_ORIGIN + '/')) event.preventDefault(); });
     session.defaultSession.setPermissionRequestHandler((_web, _permission, callback) => callback(false));
-    ipcMain.on('whale-storage', event => { event.returnValue = acceptsWindowMessage(window,event,quitting) ? values() : {}; });
-    ipcMain.on('whale-save-storage', (event, input) => { if (acceptsWindowMessage(window,event,quitting)) storeValues(input); });
-    ipcMain.on('whale-user-gesture', event => { if (isMainFrame(event)) trustedGestureAt = Date.now(); });
-    ipcMain.on('whale-shape', (event, rects) => { if (isMainFrame(event)) applyWindowShape(rects); });
-    ipcMain.handle('whale-open-external', (event, url) => isMainFrame(event) ? openWebLink(url) : false);
-    ipcMain.handle('whale-command', async (event, command) => {
-      if (!isMainFrame(event)) return false;
-      if (command === 'desktop') return setMode('standalone');
-      if (command === 'follow') return setMode('follow-codex');
-      if (command === 'mode') return desktopMode;
-      if (command === 'show') { show(); return true; }
-      if (command === 'status') { await showStatusDialog(); return true; }
-      if (command === 'stop') { pauseAndQuit(); return true; }
-      if (command === 'reset-position') return resetPosition();
-      if (['balance', 'usage', 'settings'].includes(command)) return sendCommand(command);
-      return false;
-    });
-    ipcMain.on('whale-ready', event => {
-      if (!acceptsWindowMessage(window,event,quitting)) return;
-      markStartup('imageAndInputReady');
-      try { fs.rmSync(path.join(dataDir, 'desktop-error.json'), { force: true }); } catch {}
-      clearTimeout(readyTimer); readyTimer = null;
-      clearTimeout(recoveryTimer); recoveryTimer = null;
-      rendererReady = true; diagnose('ready'); window.webContents.send('whale-desktop-mode', desktopMode); visibility(); flushCommands(); invalidate(); sendCursor(true);
-    });
-    ipcMain.on('whale-interactive', (event, enabled) => {
-      if (!acceptsWindowMessage(window,event,quitting) || (usesWindowShape && !windowShape) || typeof enabled !== 'boolean' || enabled === inputEnabled) return;
-      inputEnabled = enabled;
-      window.setIgnoreMouseEvents(!enabled, { forward: !usesWindowShape });
-    });
-    ipcMain.on('whale-keyboard-focus', (event, editing) => {
-      if (acceptsWindowMessage(window,event,quitting) && typeof editing === 'boolean') setKeyboardFocus(editing);
-    });
+    registerIpcHandlers({ ipcMain, host: ipcHost });
     // Windows uses the native cursor sampler instead of forwarding ignored mouse
     // messages into Chromium, which must not arbitrate the host cursor.
     const cursorPoll = setInterval(sendCursor, usesWindowShape ? 16 : 50);
@@ -403,11 +422,6 @@ else {
   });
 }
 
-function diagnose(reason) { try {
-  const entry={reason,desktopMode,ready:rendererReady,manuallyHidden,recoveryAttempts,hostAlive:!!lastHost?.hostAlive,hostVisible:!!lastHost?.visible,modal:!!lastHost?.modal,attached:!!lastHost?.attached,shapeCount:windowShape?.length||0,at:new Date().toISOString()};
-  visibilityHistory.push(entry);if(visibilityHistory.length>24)visibilityHistory.shift();
-  save(path.join(dataDir,'visibility-status.json'),{...entry,history:visibilityHistory});
-} catch {} }
 function resetPosition() {
   if(quitting||!window||window.isDestroyed())return false;
   if(rendererReady)window.webContents.send('whale-command','reset-position');

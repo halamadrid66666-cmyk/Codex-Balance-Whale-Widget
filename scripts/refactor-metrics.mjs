@@ -26,6 +26,39 @@ const SOUND_BOUNDARY_FILES = Object.freeze([
   'desktop/ui/features/sound-settings/view.js',
 ]);
 
+// The shared request helper landed with the sound-settings work and enforces a
+// timeout, abort propagation and one error shape. Everywhere else the renderer
+// still calls fetch() itself, so those three things differ per call site. The
+// sound boundary already forbids direct fetches; applying that to the whole
+// renderer at once would change error handling across a dozen features in one
+// step, so this holds the current count instead and stops it growing.
+//
+// Converting a call site to requestJson is the way to lower this number. Lower
+// the budget with it — the point is that it only ever moves down. Fifteen of the
+// thirty-one are in assets/whale-widget.js, which is also the file the phase-4
+// module extraction is still working through.
+export const RENDERER_DIRECT_FETCH_BUDGET = { total: 31 };
+
+// Renderer sources that must not call fetch() directly. services/request.js is
+// the helper itself, and alpha-worker.js runs off the module graph in a Worker,
+// where the helper is not reachable.
+const RENDERER_EXEMPT = new Set(['desktop/ui/services/request.js', 'desktop/ui/alpha-worker.js']);
+
+function rendererSources(root) {
+  const files = ['assets/whale-widget.js'];
+  const walk = relative => {
+    const absolute = path.join(root, relative);
+    if (!fs.existsSync(absolute)) return;
+    for (const entry of fs.readdirSync(absolute, { withFileTypes: true })) {
+      const child = relative + '/' + entry.name;
+      if (entry.isDirectory()) walk(child);
+      else if (entry.name.endsWith('.js')) files.push(child);
+    }
+  };
+  walk('desktop/ui');
+  return files.filter(file => !RENDERER_EXEMPT.has(file));
+}
+
 function read(root, relative) {
   return fs.readFileSync(path.join(root, relative), 'utf8');
 }
@@ -95,6 +128,7 @@ export function collectRefactorMetrics({ root = ROOT } = {}) {
   const soundEntry = read(root, 'desktop/ui/sound-settings.js');
   const html = read(root, 'desktop/ui/widget.html');
   const sourceSlices = sourceSliceTests(root);
+  const rendererFetches = scanFiles(root, rendererSources(root), 'renderer-direct-fetch', [/\bfetch\s*\(/g]);
   return {
     baseline: {
       commit: 'c799866d38392e52cd464156cfaaa69cce16e4b2',
@@ -109,6 +143,11 @@ export function collectRefactorMetrics({ root = ROOT } = {}) {
       whaleWidgetLines: lineCount(widget),
       sourceSliceTestFiles: sourceSlices,
       sourceSliceTestFileCount: sourceSlices.length,
+    },
+    renderer: {
+      directFetches: rendererFetches,
+      directFetchCount: rendererFetches.length,
+      directFetchBudget: RENDERER_DIRECT_FETCH_BUDGET,
     },
     sound: {
       requiredModules: required,
@@ -143,6 +182,13 @@ export function refactorBoundaryErrors(metrics) {
   if (metrics.current.whaleWidgetLines > 6500) errors.push(`assets/whale-widget.js must stay within the phase-4 maintenance cap of 6500 lines (found ${metrics.current.whaleWidgetLines}).`);
   if (metrics.current.classicScriptTags > 15) errors.push(`Classic script tags must stay within the phase-4 maintenance cap of 15 (found ${metrics.current.classicScriptTags}).`);
   if (metrics.current.sourceSliceTestFileCount > 3) errors.push(`Source-slicing test files must stay within the phase-4 maintenance cap of 3 (found ${metrics.current.sourceSliceTestFileCount}).`);
+  // A ceiling rather than a target: it exists so the number cannot grow while
+  // the migration to requestJson is done feature by feature.
+  if (metrics.renderer.directFetchCount > metrics.renderer.directFetchBudget.total) {
+    const perFile = Object.entries(metrics.renderer.directFetches.reduce((counts, item) => (counts[item.file] = (counts[item.file] || 0) + 1, counts), {}))
+      .sort((a, b) => b[1] - a[1]).map(([file, count]) => `${file}:${count}`).join(', ');
+    errors.push(`Direct fetch() calls in the renderer must not exceed the existing budget of ${metrics.renderer.directFetchBudget.total} (found ${metrics.renderer.directFetchCount}). Use requestJson from desktop/ui/services/request.js in new code, and lower the budget as call sites are converted. By file — ${perFile}`);
+  }
   return errors;
 }
 
@@ -166,6 +212,8 @@ function summary(metrics) {
       classicScriptTags: metrics.current.classicScriptTags,
       whaleWidgetLines: metrics.current.whaleWidgetLines,
       sourceSliceTestFileCount: metrics.current.sourceSliceTestFileCount,
+      rendererDirectFetches: metrics.renderer.directFetchCount,
+      rendererDirectFetchBudget: metrics.renderer.directFetchBudget.total,
     },
     sound: {
       missingModules: metrics.sound.missingModules,
