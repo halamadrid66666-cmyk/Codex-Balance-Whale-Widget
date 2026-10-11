@@ -9,7 +9,7 @@ for(const name of [
   '../runtime/composition.mjs','../runtime/http-shim.mjs','../runtime/faults.mjs','../runtime/routes/core.mjs',
   '../runtime/size-settings.mjs','../runtime/sound-settings.mjs',
   '../runtime/balance-query.mjs','../runtime/turn-accounting.mjs','../runtime/notice-publisher.mjs',
-  '../runtime/session-events.mjs','../runtime/session-parser.mjs',
+  '../runtime/session-events.mjs','../runtime/session-parser.mjs','../runtime/bounded-body.mjs',
   '../lib/atomic-write.mjs',
 ]) {
   if(!fs.existsSync(fileURLToPath(new URL(name,import.meta.url))))throw new Error('Package dependency missing: '+name);
@@ -27,5 +27,6 @@ await import('../runtime/turn-accounting.mjs');
 await import('../runtime/notice-publisher.mjs');
 await import('../runtime/session-events.mjs');
 await import('../runtime/session-parser.mjs');
+await import('../runtime/bounded-body.mjs');
 await import('../lib/atomic-write.mjs');
 process.stdout.write('Package dependency graph is complete.\n');
