@@ -29,6 +29,7 @@ Codex 桌面额度小鲸鱼：跟随 Codex 窗口的桌面挂件（Electron + No
 - `desktop/main.cjs` — Electron 主进程：窗口、透明度、点击穿透、跟随。它自己的职责边界见下面三条
 - `desktop/ipc-handlers.cjs` — 渲染进程能触达的全部 IPC 通道，一张表。主进程通过 `ipcHost` 对象把动作传进来，所以「渲染进程能调什么」写在一处可审
 - `desktop/diagnostics.cjs` — `diagnose()` 与可见性记录（`visibility-status.json` 的环形历史）。主进程把状态快照传给它，而不是反过来
+- `desktop/test-harness.cjs` — Electron 测试夹具：按需 import `tests/*-fixture.mjs`、收集渲染进程 console 错误、记录被打开的外链、手工指定光标、驱动 `verifyDesktop`。**未启用时每个方法都是空操作**，所以 `main.cjs` 无条件调用它们；`main.cjs` 里只剩 `harness.enabled` 做守卫，守卫的都是「测试模式下要抑制的生产行为」（stdout 的 overlay handle、诊断快捷键、原生模式归属），不是测试代码
 - `desktop/ui/*` — 渲染进程页面与模块
 - `assets/whale-widget.js` — 挂件前端装配入口：ES module，导入 `desktop/ui/features/*` 与 `desktop/ui/services/*` 下的模块，经 `/dsh-whale/widget.js` 提供
 - `launchers/*.cmd`、`launchers/*.command` — 终端用户双击入口（安装/启动/跟随/回滚）；内部用 `%~dp0..\scripts\` 定位仓库根，挪动脚本必须同步改这个上跳路径
@@ -62,7 +63,7 @@ Codex 桌面额度小鲸鱼：跟随 Codex 窗口的桌面挂件（Electron + No
 - **挂件样式在 `desktop/ui/whale-widget.css`**，由 `widget.html` 以 `<link>` 加载。改外观不必碰 whale-widget.js。
 - **API 模型模板只有一份**：34 个服务商模板全部定义在 `runtime/api-models.mjs` 的 `API_TEMPLATES`，经 `/api/models` 下发给前端。`desktop/ui/api-models.js` 只渲染后端返回的数据，自身不含模板表 —— 要加服务商，只改后端那个文件。
 - **版本号只有一处真源**：`.codex-plugin/plugin.json` 的 `version`（`基础版本+构建后缀`，安装器比对的就是它）。`runtime/paths.mjs` 从它推导出 `VERSION`，不再自带字面量；`package.json` 仍留一份给 npm，由 `tests/release-version.test.mjs` 断言与真源一致。发版只改 plugin.json 一处，改了 package.json 忘了同步会被测试拦下。
-- **还没做的拆分**：`desktop/main.cjs` 里 `WHALE_DESKTOP_TEST=1` 的夹具分支（约 11 处 `if (fixture)`）还没抽成 `desktop/test-harness.cjs`。抽它要靠 `.github/workflows/desktop-audit.yml` 那条审计验证，本机 `npm run test:desktop` 能跑通（Electron 运行时在旧版本里已装好，通常不必重新下载），所以可以动手。
+- **`main.cjs` 里不该再出现测试代码**：夹具分支都在 `desktop/test-harness.cjs`，加新的一条就加到那里。另外 `tests/desktop-mode.test.mjs` 会把 `main.cjs` 的 `setHost` / `setMode` 源码切出来在 vm 沙箱里跑，沙箱里手工列出了主进程的作用域名字（`harness`、`diagnostics`、`normalizeHostState` 等）——**改这两个函数引用到的名字，要同步改那个沙箱**，否则它会以 `ReferenceError` 红掉。
 - **渲染进程里的裸 `fetch()` 有预算上限**：`npm run check:architecture` 会数它，只许降不许升。新代码请用 `desktop/ui/services/request.js` 的 `requestJson`（带超时、abort 传播和统一错误类型），转换一处就把 `scripts/refactor-metrics.mjs` 里的 `RENDERER_DIRECT_FETCH_BUDGET` 降一格。
 - **隐私**：API 密钥、提供商名称、账号、本机路径、会话日志不得出现在公开仓库、UI 或日志里。
 - **新增根目录文件必须同步加进 `scripts/build-release.py` 的 `root_files`**，否则 `python scripts/build-release.py` 会以 `Unexpected file: <名字>` 断言失败。`.github/workflows/verify.yml` 会在 push/PR 上跑这道检查，所以忘了登记会在 CI 上直接红，不必等到打包。
