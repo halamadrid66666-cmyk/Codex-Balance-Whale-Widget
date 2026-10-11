@@ -164,7 +164,9 @@ test('ENOSPC reports failure for bubble settings and pinning while retaining old
   const roleFile = path.join(dir, 'roles.json'), bubbleFile = path.join(root, '.dshw-bubble.json');
   const roles = JSON.stringify({ roles: [{ id: 'default', name: 'whale', pinnedAt: 1 }] });
   const bubble = JSON.stringify({ v: 1, items: [], lib: [] }); fs.writeFileSync(roleFile, roles); fs.writeFileSync(bubbleFile, bubble);
-  const failingFs = Object.create(fs); failingFs.writeFileSync = (file, ...args) => { if (String(file).endsWith('.tmp')) throw fail(); return fs.writeFileSync(file, ...args); };
+  // lib/fs-atomic.cjs creates the temporary file exclusively with openSync before
+  // writing to it, so the injection point is the create rather than the write.
+  const failingFs = Object.create(fs); failingFs.openSync = (file, ...args) => { if (String(file).endsWith('.tmp')) throw fail(); return fs.openSync(file, ...args); };
   const app = host(t, failingFs, root);
   const saved = await app.request('/dsh-whale/bubble.json', 'PUT', { items: [{ kind: 'custom' }], lib: [] }); assert.equal(saved.payload.ok, false);
   const pinned = await app.request('/dsh-whale/role-pin.json', 'POST', { id: 'default', pinned: true }); assert.equal(pinned.payload.ok, false);

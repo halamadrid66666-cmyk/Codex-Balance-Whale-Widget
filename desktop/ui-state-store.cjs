@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const { atomicWriteSync } = require('../lib/fs-atomic.cjs');
 
 class UiStateStore {
   constructor(file) {
@@ -24,9 +25,8 @@ class UiStateStore {
     clearTimeout(this.timer); this.timer = null;
     if (!this.dirty) return this.writes;
     const encoded = this.encoded; this.dirty = false;
-    this.writes = this.writes.catch(() => {}).then(async () => {
-      const temp = this.file + '.' + process.pid + '.tmp';
-      try { await fs.promises.writeFile(temp, encoded); await fs.promises.rename(temp, this.file); }
+    this.writes = this.writes.catch(() => {}).then(() => {
+      try { atomicWriteSync(this.file, encoded); }
       catch (error) { this.dirty = true; throw error; }
     });
     return this.writes;
