@@ -9,6 +9,12 @@ import { stripRetiredModules } from '../migration.mjs';
 // of `if (url.pathname === ...)`. The widget host registers its own routes into
 // the same lookup, so there is one precedence rule and one place to read.
 //
+// A handler receives one argument, `{ body, url }`. It used to be positional
+// `(body, url)`, which quietly handed the body to any handler written as
+// `url => ...` — that shipped once, and /api/quota answered 500 because
+// `url.searchParams` was really a Buffer. One named argument cannot be
+// half-right.
+//
 // `fallthrough: true` records a quirk of the code this replaced: those guards
 // only matched the listed methods, so any other method continued into static
 // resolution and ended as a 404 rather than a 405. Behaviour is preserved here
@@ -23,7 +29,7 @@ export function createCoreRoutes(ctx) {
 
   route('/api/display-mode', {
     GET: () => jsonResult(200, { ok: true, mode: displayMode() }),
-    POST: body => {
+    POST: ({ body }) => {
       const input = json(body);
       if (!['api', 'subscription'].includes(input.mode)) return jsonResult(400, { ok: false, error: '请选择 API 或会员订阅额度模式' });
       writeJson(displayModeFile, { version: 1, mode: input.mode });
@@ -32,11 +38,11 @@ export function createCoreRoutes(ctx) {
   });
 
   route('/api/insights', {
-    GET: async url => jsonResult(200, await insights.get({ force: url.searchParams.get('refresh') === '1' })),
+    GET: ({ url }) => insights.get({ force: url.searchParams.get('refresh') === '1' }).then(payload => jsonResult(200, payload)),
   }, { fallthrough: true });
 
   route('/api/quota', {
-    GET: async url => jsonResult(200, await insights.getQuota({ force: url.searchParams.get('refresh') === '1' })),
+    GET: ({ url }) => insights.getQuota({ force: url.searchParams.get('refresh') === '1' }).then(payload => jsonResult(200, payload)),
   }, { fallthrough: true });
 
   route('/dsh-whale/wait.json', {
@@ -49,7 +55,7 @@ export function createCoreRoutes(ctx) {
 
   route('/api/reconcile', {
     GET: () => jsonResult(200, whale.usageRecords()),
-    POST: body => {
+    POST: ({ body }) => {
       try { return jsonResult(200, whale.reconcileUsage(json(body))); }
       catch (error) { return jsonResult(error?.status === 409 ? 409 : 400, { ok: false, error: error?.message || '余额校正失败' }); }
     },
@@ -57,13 +63,13 @@ export function createCoreRoutes(ctx) {
 
   route('/api/models', {
     GET: () => jsonResult(200, apiModels.list()),
-    PUT: body => jsonResult(200, apiModels.save(json(body))),
-    POST: body => jsonResult(200, apiModels.save(json(body))),
-    DELETE: (body, url) => jsonResult(200, apiModels.delete(url.searchParams.get('id') || json(body).id)),
+    PUT: ({ body }) => jsonResult(200, apiModels.save(json(body))),
+    POST: ({ body }) => jsonResult(200, apiModels.save(json(body))),
+    DELETE: ({ url, body }) => jsonResult(200, apiModels.delete(url.searchParams.get('id') || json(body).id)),
   });
 
   route('/api/models/value', {
-    GET: async (body, url) => {
+    GET: async ({ url }) => {
       const id = url.searchParams.get('id');
       const model = apiModels.model(id);
       const template = model && apiModels.list().templates.find(item => item.id === model.template);
@@ -76,7 +82,7 @@ export function createCoreRoutes(ctx) {
   }, { fallthrough: true });
 
   route('/api/models/probe', {
-    POST: async body => jsonResult(200, await apiModels.read(json(body).id, { probe: true })),
+    POST: async ({ body }) => jsonResult(200, await apiModels.read(json(body).id, { probe: true })),
   }, { fallthrough: true });
 
   route('/api/workshop/export', {
@@ -84,7 +90,7 @@ export function createCoreRoutes(ctx) {
   }, { fallthrough: true });
 
   route('/api/workshop/import', {
-    POST: body => jsonResult(200, importWorkshop(dataDir, json(body))),
+    POST: ({ body }) => jsonResult(200, importWorkshop(dataDir, json(body))),
   }, { fallthrough: true });
 
   route('/api/status', {
@@ -99,11 +105,11 @@ export function createCoreRoutes(ctx) {
 
   route('/api/config', {
     GET: () => jsonResult(200, { ok: true, ...whale.config.settingsInfo() }),
-    PUT: body => { whale.config.save(json(body)); return jsonResult(200, { ok: true, ...whale.config.settingsInfo() }); },
+    PUT: ({ body }) => { whale.config.save(json(body)); return jsonResult(200, { ok: true, ...whale.config.settingsInfo() }); },
   });
 
   route('/api/fx/usd-cny', {
-    GET: async (body, url) => {
+    GET: async ({ url }) => {
       const manual = url.searchParams.get('refresh') === '1';
       try { return jsonResult(200, { ok: true, ...await fx.get(manual ? { force: true, reason: 'manual' } : {}) }); }
       catch (error) {
@@ -125,7 +131,7 @@ export function createCoreRoutes(ctx) {
       try { return jsonResult(200, await soundSettings.load()); }
       catch (error) { return settingsFailure(error); }
     },
-    PUT: async body => {
+    PUT: async ({ body }) => {
       try { return jsonResult(200, await soundSettings.save(json(body))); }
       catch (error) { return settingsFailure(error); }
     },

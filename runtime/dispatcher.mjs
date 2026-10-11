@@ -67,7 +67,7 @@ export function createDispatcher(options = {}) {
       const endpoint = routes.get(url.pathname);
       if (endpoint) {
         const handler = endpoint.handlers[method];
-        if (handler) return await handler(bytes, url);
+        if (handler) return await handler({ body: bytes, url });
         // Earlier these guards matched the listed methods only, so any other
         // method carried on into static resolution and finished as a 404.
         if (!endpoint.fallthrough) return jsonResult(405, endpoint.methodNotAllowed ?? { ok: false });
