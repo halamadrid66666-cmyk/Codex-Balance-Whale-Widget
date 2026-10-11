@@ -62,7 +62,7 @@ Codex 桌面额度小鲸鱼：跟随 Codex 窗口的桌面挂件（Electron + No
 - **挂件样式在 `desktop/ui/whale-widget.css`**，由 `widget.html` 以 `<link>` 加载。改外观不必碰 whale-widget.js。
 - **API 模型模板只有一份**：34 个服务商模板全部定义在 `runtime/api-models.mjs` 的 `API_TEMPLATES`，经 `/api/models` 下发给前端。`desktop/ui/api-models.js` 只渲染后端返回的数据，自身不含模板表 —— 要加服务商，只改后端那个文件。
 - **版本号只有一处真源**：`.codex-plugin/plugin.json` 的 `version`（`基础版本+构建后缀`，安装器比对的就是它）。`runtime/paths.mjs` 从它推导出 `VERSION`，不再自带字面量；`package.json` 仍留一份给 npm，由 `tests/release-version.test.mjs` 断言与真源一致。发版只改 plugin.json 一处，改了 package.json 忘了同步会被测试拦下。
-- **还没做的拆分**：`desktop/main.cjs` 里 `WHALE_DESKTOP_TEST=1` 的夹具分支（约 11 处 `if (fixture)`）还没抽成 `desktop/test-harness.cjs`。抽它必须跑 `.github/workflows/desktop-audit.yml` 那条审计才能验证，所以先确认本机能跑 `npm run test:desktop`，再动手。
+- **还没做的拆分**：`desktop/main.cjs` 里 `WHALE_DESKTOP_TEST=1` 的夹具分支（约 11 处 `if (fixture)`）还没抽成 `desktop/test-harness.cjs`。抽它要靠 `.github/workflows/desktop-audit.yml` 那条审计验证，本机 `npm run test:desktop` 能跑通（Electron 运行时在旧版本里已装好，通常不必重新下载），所以可以动手。
 - **渲染进程里的裸 `fetch()` 有预算上限**：`npm run check:architecture` 会数它，只许降不许升。新代码请用 `desktop/ui/services/request.js` 的 `requestJson`（带超时、abort 传播和统一错误类型），转换一处就把 `scripts/refactor-metrics.mjs` 里的 `RENDERER_DIRECT_FETCH_BUDGET` 降一格。
 - **隐私**：API 密钥、提供商名称、账号、本机路径、会话日志不得出现在公开仓库、UI 或日志里。
 - **新增根目录文件必须同步加进 `scripts/build-release.py` 的 `root_files`**，否则 `python scripts/build-release.py` 会以 `Unexpected file: <名字>` 断言失败。`.github/workflows/verify.yml` 会在 push/PR 上跑这道检查，所以忘了登记会在 CI 上直接红，不必等到打包。
