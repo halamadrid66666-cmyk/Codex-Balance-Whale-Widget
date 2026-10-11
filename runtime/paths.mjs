@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { domainError } from '../lib/errors.mjs';
 
 // lib/fs-atomic.cjs is the project's only atomic-write implementation; ESM
 // modules load it through createRequire because the Electron side needs it
@@ -34,7 +35,7 @@ export function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
   catch (error) {
     if (error.code === 'ENOENT') return structuredClone(fallback);
-    throw new Error('本地数据文件损坏或不可读：' + path.basename(file));
+    throw domainError('本地数据文件损坏或不可读：' + path.basename(file));
   }
 }
 

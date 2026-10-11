@@ -15,7 +15,12 @@ Codex 桌面额度小鲸鱼：跟随 Codex 窗口的桌面挂件（Electron + No
 **没有 HTTP 端口，也没有独立网页。** 渲染进程走自定义协议 `whale://widget/widget.html`；后台服务与 CLI/桌面之间走具名管道 IPC（Windows `\\.\pipe\codex-whale-*`，macOS 走 unix socket），且只有 `runtime/bridge.mjs` 中 `ALLOWED` 白名单内的路径能跨进程。
 
 - `scripts/control.mjs` — CLI 入口
-- `runtime/dispatcher.mjs` — 中央路由，组装所有子服务
+- `runtime/dispatcher.mjs` — 请求路径：校验 → 端点表 → 静态文件 → 挂件路由。只做分发，不再组装服务
+- `runtime/composition.mjs` — 组合根：构造 WhaleService / fx / insights / apiModels / soundSettings / SessionMonitor，返回一个容器；加协作方改这里，加端点改 `routes/`
+- `runtime/routes/core.mjs` — 核心端点表（`/api/*` 与 `/dsh-whale/wait.json`）。挂件路由注册进同一张查询，只有一条优先级规则
+- `runtime/http-shim.mjs` — 没有服务器的那一小片 HTTP：MIME 表、CSP、`jsonResult`、把 `writeHead/end` 收成 `{status, headers, body}` 的收集器
+- `runtime/faults.mjs` — 意外异常的环形缓冲，即 `/api/status` 的 `faults`
+- `lib/errors.mjs` — `DomainError`：调用方能自己修的失败，带自己的状态码和消息（4xx）。**没有抛 DomainError 的异常一律按本进程缺陷处理**，记引用号、细节写 stderr、对外回 500，不再伪装成「请检查设置」
 - `runtime/service.mjs` — WhaleService：余额、配置、账本
 - `runtime/bridge.mjs` — 具名管道 IPC（`ALLOWED` 与 `HOST_ROUTES` 两张表合起来才是完整的外部可达路径集）
 - `runtime/process.mjs` — 拉起/探测服务（Windows schtasks，macOS launchctl）

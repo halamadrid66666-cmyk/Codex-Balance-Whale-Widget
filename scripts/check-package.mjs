@@ -6,6 +6,8 @@ for(const name of [
   '../desktop/ui/services/request.js','../desktop/ui/services/sound-reference.js',
   '../desktop/ui/features/sound-settings/model.js','../desktop/ui/features/sound-settings/controller.js','../desktop/ui/features/sound-settings/view.js',
   '../desktop/ui/features/widget/default-content.js','../desktop/ui/features/widget/bubble-layout.js','../desktop/ui/features/widget/custom-select.js','../desktop/ui/features/widget/usage-charts.js','../desktop/ui/features/widget/bubble-editor-commands.js','../desktop/ui/features/widget/bubble-scene.js','../desktop/ui/features/widget/bubble-notice-queue.js','../desktop/ui/features/widget/bubble-interaction.js','../desktop/ui/features/widget/input-policy.js','../desktop/ui/features/widget/task-end-sound.js','../desktop/ui/features/widget/name-marquee.js','../desktop/ui/features/widget/role-manager.js','../desktop/ui/features/widget/character-interaction.js','../desktop/ui/features/widget/asset-client.js','../desktop/ui/features/widget/anchors.js','../desktop/ui/features/widget/resource-manager.js','../desktop/ui/features/widget/menu-hover.js','../desktop/ui/features/widget/bubble-editor-view.js','../desktop/ui/features/widget/bubble-editor-model.js','../desktop/ui/features/widget/usage-records-view.js','../desktop/ui/features/widget/usage-alerts.js','../desktop/ui/features/widget/snap-editor.js','../desktop/ui/features/widget/bubble-color-select.js','../desktop/ui/features/widget/bubble-palette.js','../desktop/ui/features/widget/bubble-quick-editors.js','../desktop/ui/features/widget/usage-models-view.js','../desktop/ui/features/widget/usage-overview-view.js','../desktop/ui/features/widget/fx-controls.js','../desktop/ui/features/widget/usage-navigation.js','../desktop/ui/features/widget/bubble-content.js','../desktop/ui/features/widget/bubble-template-help.js','../desktop/ui/features/widget/bubble-rows-view.js','../desktop/ui/features/widget/turn-notice-poller.js',
+  '../lib/fs-atomic.cjs','../lib/errors.mjs',
+  '../runtime/composition.mjs','../runtime/http-shim.mjs','../runtime/faults.mjs','../runtime/routes/core.mjs',
   '../runtime/size-settings.mjs','../runtime/sound-settings.mjs',
   '../runtime/balance-query.mjs','../runtime/turn-accounting.mjs','../runtime/notice-publisher.mjs',
   '../runtime/session-events.mjs','../runtime/session-parser.mjs',
@@ -15,6 +17,8 @@ for(const name of [
 if(!fs.existsSync(fileURLToPath(new URL('../desktop/ui/account-view.js',import.meta.url))))throw new Error('Account view module is missing');
 if(!fs.existsSync(fileURLToPath(new URL('../desktop/ui/shape.js',import.meta.url))))throw new Error('Window region module is missing');
 await import('../runtime/dispatcher.mjs');
+await import('../runtime/composition.mjs');
+await import('../runtime/routes/core.mjs');
 await import('../runtime/process.mjs');
 await import('../runtime/size-settings.mjs');
 await import('../runtime/sound-settings.mjs');
