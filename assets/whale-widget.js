@@ -373,6 +373,27 @@ import {
     row1.appendChild(menuLabel('大小'));
     row1.appendChild(scaleInput);
     row1.appendChild(scaleNumber);
+    var shapeRow = menuRow();
+    shapeRow.appendChild(menuLabel('气泡形状'));
+    var shapeSel = document.createElement('select');
+    shapeSel.id = 'dshw-bubble-shape';
+    shapeSel.className = 'dshwv-sound';
+    shapeSel.title = '切换气泡外形：椭圆更圆润，圆角方形能显示更多内容';
+    [['ellipse', '椭圆'], ['round', '圆角方形']].forEach(function (entry) {
+      var option = document.createElement('option');
+      option.value = entry[0]; option.textContent = entry[1]; shapeSel.appendChild(option);
+    });
+    shapeRow.appendChild(shapeSel);
+    dshwCustSel(shapeSel, { bottom: function () { return row2; } });
+    shapeSel.parentNode.style.flex = '0 0 104px';
+    shapeSel.parentNode.style.width = '104px';
+    shapeSel.addEventListener('change', function () {
+      var applied = applyBubbleShape(shapeSel.value);
+      shapeSel.value = applied;
+      try { localStorage.setItem('dshw-bubble-shape', applied); } catch (err) {}
+      // The committed frame was fitted against the previous path.
+      try { window.WhaleRendering && window.WhaleRendering.presentFor(260); } catch (err) {}
+    });
     var row2 = menuRow();
     row2.appendChild(menuLabel('音效'));
     row2.appendChild(audioGroupBtn);
@@ -484,6 +505,7 @@ import {
     });
     menuBox.appendChild(rowRole);
     menuBox.appendChild(row1);
+    menuBox.appendChild(shapeRow);
     menuBox.appendChild(row2);
     menuBox.appendChild(row3);
     menuBox.appendChild(row6);
@@ -3445,9 +3467,18 @@ import {
       hintEl = parts.hint; gifEl = parts.gif;
     }
     bindBubbleParts(bubbleFrames.front);
+    // Bubble body geometry. Both shapes share the 1026x700 viewBox and the same
+    // outer bounds, so the pop box, the tail beads and the native window region
+    // are unaffected by a shape switch. The rounded variant keeps the same tail
+    // notch near x=340..445 so .dshwv-b1/.dshwv-b2 stay attached.
+    var BUBBLE_SHAPES = {
+      ellipse: 'M 827 248 A 373 232 0 1 0 81 246 A 373 232 0 0 0 301 465 A 57 32 10 0 0 413 484 A 373 232 0 0 0 827 248 Z',
+      round: 'M 231 15 L 677 15 A 150 150 0 0 1 827 165 L 827 329 A 150 150 0 0 1 677 479 L 445 479 C 428 479 420 496 404 502 C 390 507 376 500 369 489 C 361 478 352 479 338 479 L 231 479 A 150 150 0 0 1 81 329 L 81 165 A 150 150 0 0 1 231 15 Z'
+    };
+    var bubbleShape = 'ellipse';
     var bubbleBox = document.createElement('div');
     bubbleBox.className = 'dshwv-pop';
-    bubbleBox.innerHTML = '<svg viewBox="0 0 1026 700" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">' + '<path class="dshwv-bshape" fill="#FFFFFF" stroke="#203170" stroke-width="18" stroke-linejoin="round" stroke-linecap="round" d="M 827 248 A 373 232 0 1 0 81 246 A 373 232 0 0 0 301 465 A 57 32 10 0 0 413 484 A 373 232 0 0 0 827 248 Z"/>' + '<ellipse class="dshwv-b1" cx="352" cy="561" rx="37.5" ry="26" fill="#FFFFFF" stroke="#203170" stroke-width="18"/>' + '<ellipse class="dshwv-b2" cx="442" cy="646" rx="24.5" ry="18" fill="#FFFFFF" stroke="#203170" stroke-width="18"/>' + '</svg>';
+    bubbleBox.innerHTML = '<svg viewBox="0 0 1026 700" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">' + '<path class="dshwv-bshape" fill="#FFFFFF" stroke="#203170" stroke-width="18" stroke-linejoin="round" stroke-linecap="round" d="' + BUBBLE_SHAPES.ellipse + '"/>' + '<ellipse class="dshwv-b1" cx="352" cy="561" rx="37.5" ry="26" fill="#FFFFFF" stroke="#203170" stroke-width="18"/>' + '<ellipse class="dshwv-b2" cx="442" cy="646" rx="24.5" ry="18" fill="#FFFFFF" stroke="#203170" stroke-width="18"/>' + '</svg>';
     bubbleBox.appendChild(textBox);
     bubbleSceneController = createBubbleSceneController({
       frames: bubbleFrames, box: bubbleBox, bindParts: bindBubbleParts,
@@ -3505,6 +3536,34 @@ import {
         measureBubbleCenter();
       });
     } catch (err) {}
+    function applyBubbleShape(next) {
+      if (!BUBBLE_SHAPES) return 'ellipse';
+      if (!Object.prototype.hasOwnProperty.call(BUBBLE_SHAPES, next)) next = 'ellipse';
+      if (next === bubbleShape) return bubbleShape;
+      bubbleShape = next;
+      try {
+        var shape = bubbleBox && bubbleBox.querySelector('.dshwv-bshape');
+        if (shape) shape.setAttribute('d', BUBBLE_SHAPES[bubbleShape]);
+        bubbleBox.classList.toggle('dshwv-shape-round', bubbleShape === 'round');
+        // The preview and the settings dialog render outside .dshwv-pop, so the
+        // shape also has to reach the document for their CSS to switch.
+        document.documentElement.classList.toggle('dshw-shape-round', bubbleShape === 'round');
+      } catch (err) {}
+      // The rounded path has a different bounding box than the ellipse.
+      measureBubbleCenter();
+      try { window.WhaleRendering && window.WhaleRendering.refitBubble(); } catch (err) {}
+      return bubbleShape;
+    }
+    // dshw-bubble-shape is mirrored to ui-state.json by the /^dshw[-v]/ rule in
+    // desktop/ui-state-store.cjs, so no size.json signature change is needed.
+    try {
+      var savedShape = localStorage.getItem('dshw-bubble-shape');
+      if (savedShape) applyBubbleShape(savedShape);
+    } catch (err) {}
+    // The menu select is built earlier in this closure; sync it to the restored shape.
+    try { if (typeof shapeSel !== 'undefined' && shapeSel) shapeSel.value = bubbleShape; } catch (err) {}
+    // Menu rows and the settings window call this instead of owning the path map.
+    window.WhaleBubbleShape = Object.freeze({ apply: applyBubbleShape, current: function () { return bubbleShape; } });
     var state = {
       scale: 1.5,
       h: 'right',
