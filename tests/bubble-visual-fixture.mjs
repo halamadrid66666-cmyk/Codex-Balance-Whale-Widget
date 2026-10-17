@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const CASES = [
-  { name: '0-订阅额度', modules: [
+  { name: '0-订阅额度', quota: 35.7, modules: [
       { type: 'plan', quotaStyle: 'header', size: 4, bold: true, color: '#53669a', tpl: '{plan_name}' },
       { type: 'quota', quotaStyle: 'meter', windowDurationMins: 300, row: 1 },
       { type: 'quota', quotaStyle: 'meter', windowDurationMins: 10080, row: 1 } ] },
@@ -25,8 +25,8 @@ const CASES = [
       { type: 'text', text: '¥10.00', size: 7, bold: true, rgb: 'rouge' } ] },
 ];
 
-export async function renderBubbleVisual({ window, app, dataDir, screen, errors = [] }) {
-  try { window.setBounds({ x: 40, y: 40, width: 1280, height: 820 }); } catch {}
+export async function renderBubbleVisual({ window, app, dataDir, dispatcher, errors = [] }) {
+  try { window.setResizable(true); window.setBounds({ x: 40, y: 40, width: 1280, height: 820 }); } catch {}
   const out = process.env.WHALE_DESKTOP_VERIFY_DIR || path.join(dataDir, 'shots');
   fs.mkdirSync(out, { recursive: true });
   const ev = code => window.webContents.executeJavaScript(code, true);
@@ -34,8 +34,11 @@ export async function renderBubbleVisual({ window, app, dataDir, screen, errors 
   const wait = async (c, l) => { const d = Date.now() + 8000; for (;;) { const v = await ev(c); if (v) return v; if (Date.now() > d) throw new Error('timeout ' + l + '; renderer errors: ' + JSON.stringify(errors.slice(-6))); await new Promise(r => setTimeout(r, 60)); } };
   await wait('!!window.__whaleRenderTest', 'hook');
   try {
+    const scenarios = [...CASES, ...[0, 100, null].map((quota, i) => ({ ...CASES[0], name: ['5-额度耗尽', '6-完整额度', '7-未登录'][i], quota }))];
     for (const shape of ['ellipse', 'round']) {
-      for (const item of CASES) {
+      for (const scale of [0.8, 1.5, 2.2]) {
+        await ev(`window.__whaleRenderTest.scale(${scale})`);
+      for (const item of scenarios) {
         // 先关掉上一场景：切换期间 bubbleRenderModules 会跳过写入，残留旧内容。
         try { await ev('window.__whaleRenderTest && window.__whaleRenderTest.close()'); } catch {}
         await new Promise(r => setTimeout(r, 350));
@@ -46,20 +49,31 @@ export async function renderBubbleVisual({ window, app, dataDir, screen, errors 
           localStorage.setItem('dshw-bubble-shape', applied);
           return applied;
         })()`);
+        if (Object.hasOwn(item, 'quota')) {
+          const now = Date.now();
+          dispatcher.whale.fixtureSubscription = { planType: 'plus', source: 'codex-app-server',
+            status: item.quota === null ? 'unauthenticated' : 'ready',
+            reason: item.quota === null ? '请登录 Codex' : '',
+            windows: item.quota === null ? [] : [300, 10080].map(windowDurationMins => ({ windowDurationMins,
+              usedPercent: 100-item.quota, observedAt: now, resetsAt: now+7*86400000+12*3600000 })) };
+          await ev('window.WhaleQuota.refresh(true)');
+        }
         if (item.real) {
           // 走真实路径：whaleClick 会按当前显示模式弹出默认序列（订阅=两个额度卡）。
           await ev('window.__whaleRenderTest && window.__whaleRenderTest.open()');
         } else {
-          await ev(`window.__whaleRenderTest.scene(${JSON.stringify(item.modules)}, 0)`);
+          await ev(`window.__whaleRenderTest.scene(${JSON.stringify(item.modules)}, 60000)`);
         }
         // 等气泡真的打开再量，避免开场动画期间量到旧场景或空场景。
         await wait("!!document.querySelector('.dshwv-pop.dshwv-pop-open')", 'pop open');
-        await new Promise(r => setTimeout(r, 500));
+        await wait("!window.__whaleRenderTest.status().switching && !!document.querySelector('.dshwv-frame[aria-hidden=\"false\"]')", 'committed frame');
+        await wait("!document.getAnimations().some(a => a.effect?.target?.closest?.('.dshwv-pop') && ['transform','opacity'].includes(a.transitionProperty))", 'bubble transition settled');
+        await new Promise(r => setTimeout(r, 150));
         const m = await ev(`(() => {
           const pop = document.querySelector('.dshwv-pop.dshwv-pop-open');
           if (!pop) return null;
           const shape = pop.querySelector('.dshwv-bshape');
-          const frame = pop.querySelector('.dshwv-frame');
+          const frame = pop.querySelector('.dshwv-frame[aria-hidden="false"]');
           if (!shape || !frame) return null;
           const sr = shape.getBoundingClientRect();
           const fr = frame.getBoundingClientRect();
@@ -68,7 +82,7 @@ export async function renderBubbleVisual({ window, app, dataDir, screen, errors 
           // 每个文本行的四角都必须落在气泡 path 内，不允许裁切或溢出。
           const inverse = shape.getScreenCTM().inverse();
           const inWhite = (x, y) => shape.isPointInFill(new DOMPoint(x, y).matrixTransform(inverse));
-          const ranges = [...pop.querySelectorAll('.dshwv-trow')].flatMap(el => {
+          const ranges = [...frame.querySelectorAll('.dshwv-trow')].flatMap(el => {
             const range = document.createRange(); range.selectNodeContents(el);
             return [...range.getClientRects()].filter(r => r.width && r.height).map(r => ({
               text: el.textContent.trim().slice(0, 12),
@@ -76,35 +90,45 @@ export async function renderBubbleVisual({ window, app, dataDir, screen, errors 
                 .every(([x, y]) => inWhite(x, y))
             }));
           });
+          const cardsContained = [...frame.querySelectorAll('.dshwv-quota-meter')].every(card => {
+            const box = card.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(card);
+            return [...range.getClientRects()].filter(r=>r.width && r.height).every(r => r.left>=box.left-1 && r.right<=box.right+1 && r.top>=box.top-1 && r.bottom<=box.bottom+1);
+          });
+          const unbrokenNumbers = [...frame.querySelectorAll('.dshwv-quota-meter-number')].every(el => {
+            const range = document.createRange(); range.selectNodeContents(el);
+            return [...range.getClientRects()].filter(r=>r.width && r.height).length === 1;
+          });
           const pad = 18;
           return {
-            fit: fs,
+            fit: fs, cardsContained, unbrokenNumbers,
             bubbleW: Math.round(sr.width), bubbleH: Math.round(sr.height),
             clip: { x: Math.max(0, Math.round(sr.left - pad)), y: Math.max(0, Math.round(sr.top - pad)),
                     width: Math.round(sr.width + pad * 2), height: Math.round(sr.height + pad * 2) },
             contentW: Math.round(fr.width), contentH: Math.round(fr.height),
             ranges,
             contained: ranges.length > 0 && ranges.every(r => r.insideWhite),
-            texts: [...pop.querySelectorAll('.dshwv-text *')]
+            texts: [...frame.querySelectorAll('*')]
               .filter(n => n.children.length === 0 && n.textContent.trim())
               .slice(0, 8)
               .map(n => ({ t: n.textContent.trim().slice(0, 8), fs: Math.round(parseFloat(getComputedStyle(n).fontSize) * 10) / 10 })),
           };
         })()`);
-        if (!m) { rows.push({ name: `${shape} / ${item.name}`, missing: true }); continue; }
-        const file = path.join(out, `${shape}-${item.name}.png`);
+        if (!m) { rows.push({ name: `${shape} / ${scale} / ${item.name}`, missing: true }); continue; }
+        const file = path.join(out, `${shape}-${scale}-${item.name}.png`);
         fs.writeFileSync(file, (await window.webContents.capturePage(m.clip)).toPNG());
-        rows.push({ name: `${shape} / ${item.name}`, ...m, file: path.basename(file) });
+        rows.push({ name: `${shape} / ${scale} / ${item.name}`, ...m, file: path.basename(file) });
+      }
       }
     }
   } catch (error) {
     rows.push({ name: 'ERROR', error: String(error && error.message || error) });
   }
   const report = { rows };
-  fs.writeFileSync(path.join(out, 'bubble-visual.json'), JSON.stringify(report, null, 2));
   // 几何验收：每个场景的文字都必须整体落在气泡白色区域内。
-  const broken = rows.filter(row => row.missing || row.error || row.contained === false);
-  report.ok = broken.length === 0;
+  const broken = rows.filter(row => row.missing || row.error || row.contained === false || row.cardsContained === false || row.unbrokenNumbers === false);
+  report.ok = broken.length === 0 && rows.length === 48;
+  fs.writeFileSync(path.join(out, 'bubble-visual.json'), JSON.stringify(report, null, 2));
   try { app.quit(); } catch {}
   return report;
 }

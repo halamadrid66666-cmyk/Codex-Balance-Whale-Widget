@@ -37,18 +37,20 @@ class SettingsStore {
   constructor({ domains, onChange } = {}) {
     this.domains = domains || {};
     this.onChange = typeof onChange === 'function' ? onChange : () => {};
+    this.writes = Promise.resolve();
   }
 
   has(domain) { return Object.hasOwn(this.domains, domain); }
 
   /** 读出一个或多个域的当前值。 */
-  read(domains) {
+  async read(domains) {
+    await this.writes;
     const names = Array.isArray(domains) ? domains : [domains];
     const values = {};
     const missing = [];
     for (const name of names) {
       if (!this.has(name)) { missing.push(name); continue; }
-      values[name] = clone(this.domains[name].read());
+      values[name] = clone(await this.domains[name].read());
     }
     if (missing.length) throw new Error('未知的设置域：' + missing.join('、'));
     return values;
@@ -67,7 +69,13 @@ class SettingsStore {
    *          主线上的域写入（音效事务）是异步队列，所以保存整体是异步的；
    *          成功确认后才回报 ok，失败时错误消息原样带出。
    */
-  async save({ domain, changes, base, force = false, keep = [] } = {}) {
+  save(input) {
+    const job = this.writes.then(() => this.saveOnce(input));
+    this.writes = job.catch(() => {});
+    return job;
+  }
+
+  async saveOnce({ domain, changes, base, force = false, keep = [] } = {}) {
     if (!this.has(domain)) return { ok: false, error: '未知的设置域：' + domain };
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
       return { ok: false, error: '没有要保存的修改' };
@@ -76,7 +84,7 @@ class SettingsStore {
     if (!keys.length) return { ok: false, error: '没有要保存的修改' };
 
     const adapter = this.domains[domain];
-    const current = clone(adapter.read());
+    const current = clone(await adapter.read());
 
     // 冲突判定：只对「用户改了的键」和「开页后被别人改了的键」取交集。
     // 别人改了同一页的其它键不算冲突，那些键的当前值会原样保留。
@@ -109,18 +117,20 @@ class SettingsStore {
       applied[key] = changes[key];
     }
 
-    await adapter.write(next);
-    this.onChange({ domain, values: clone(next), keys: Object.keys(applied) });
-    return { ok: true, applied, values: clone(next) };
+    await adapter.write(next, { changes: applied, base: current });
+    const saved = clone(await adapter.read());
+    this.onChange({ domain, values: saved, keys: Object.keys(applied) });
+    return { ok: true, applied, values: saved };
   }
 
   /**
    * 预览：只读地算出「保存后会变成什么」，不落盘。用于保存前确认和帮助文案。
    * 与 save 共用同一套合并规则，保证预览和真实结果一致。
    */
-  preview({ domain, changes, base } = {}) {
+  async preview({ domain, changes } = {}) {
+    await this.writes;
     if (!this.has(domain)) return { ok: false, error: '未知的设置域：' + domain };
-    const current = clone(this.domains[domain].read());
+    const current = clone(await this.domains[domain].read());
     const merged = { ...current };
     const applied = {};
     for (const [key, value] of Object.entries(changes || {})) {
@@ -132,4 +142,28 @@ class SettingsStore {
   }
 }
 
-module.exports = { SettingsStore, sameValue };
+// Both domains use the service's existing transaction and revision checks.
+// Apply only changed keys to a fresh snapshot, never a pre-await full document.
+function createSoundSettingsDomains(service) {
+  const view = (snapshot, domain) => domain === 'completion'
+    ? { turnCostOn: snapshot.size.turnCostOn, on: snapshot.usage.taskEnd.on } : snapshot[domain];
+  return Object.fromEntries(['size', 'usage', 'completion'].map(domain => [domain, {
+    read: async () => view(await service.load(), domain),
+    write: async (_next, { changes, base }) => {
+      const current = await service.load();
+      for (const key of Object.keys(changes)) {
+        if (!sameValue(view(current, domain)[key], base[key])) throw new Error('设置已改变，请重新加载后重试');
+      }
+      const command = { schemaVersion: current.schemaVersion, revision: current.revision,
+        size: current.size, usage: current.usage,
+      };
+      if (domain === 'completion') {
+        command.size = { ...current.size, turnCostOn: changes.turnCostOn ?? current.size.turnCostOn };
+        command.usage = { ...current.usage, taskEnd: { ...current.usage.taskEnd, on: changes.on ?? current.usage.taskEnd.on } };
+      } else command[domain] = { ...current[domain], ...changes };
+      await service.save(command);
+    },
+  }]));
+}
+
+module.exports = { SettingsStore, sameValue, createSoundSettingsDomains };

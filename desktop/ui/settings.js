@@ -53,9 +53,10 @@ import { requestJson } from '/services/request.js';
   }
 
   function currentValue(field) {
-    if (field.id === 'usage.taskEndOn') return pages.readValue(field, state.values);
+    if (field.id === 'usage.taskEndOn') return state.draft.__combo ?? pages.readValue(field, state.values);
     const merged = mergedFor(field);
-    if (Object.hasOwn(merged, field.key)) return merged[field.key];
+    const actual = pages.readValue(field, { ...state.values, [field.domain]: merged });
+    if (actual !== undefined) return actual;
     return pages.defaultFor(field, state.values);
   }
 
@@ -64,24 +65,18 @@ import { requestJson } from '/services/request.js';
     const base = state.baseline[field.domain] || {};
     const draft = state.drafts[pageId]?.[field.domain] || {};
     if (field.id === 'usage.taskEndOn') {
-      return !same(draft.__combo, undefined) || !same(pages.readValue(field, state.values), comboValue(draft));
+      return Object.hasOwn(state.drafts[pageId] || {}, '__combo') && !same(state.drafts[pageId].__combo, pages.readValue(field, state.values));
     }
-    if (!Object.hasOwn(draft, field.key)) return false;
-    return !same(draft[field.key], base[field.key]);
+    return !same(pages.readValue(field, { [field.domain]: { ...base, ...draft } }), pages.readValue(field, { [field.domain]: base }));
   }
 
   function anyDirty(pageId = state.page) {
     return catalog.forPage(pageId).some(field => isDirty(field, pageId));
   }
 
-  // 组合字段在草稿里存的是三选一的结果，比较时用它而不是已保存值。
-  function comboValue(draft) {
-    if (Object.hasOwn(draft || {}, '__combo')) return draft.__combo;
-    return undefined;
-  }
-
   function change(field, value) {
-    const patch = pages.toPatch(field, value, state.values);
+    if (field.id === 'usage.taskEndOn') { state.draft.__combo = value; updateChrome(); return; }
+    const patch = pages.toPatch(field, value, { ...state.values, [field.domain]: mergedFor(field) });
     for (const [domain, changes] of Object.entries(patch)) {
       state.draft[domain] = state.draft[domain] || {};
       Object.assign(state.draft[domain], changes);
@@ -105,8 +100,8 @@ import { requestJson } from '/services/request.js';
   async function loadPage(pageId) {
     const domains = DOMAINS_BY_PAGE(pageId);
     const result = await bridge.readSettings(domains);
-    if (!result.ok) { showNotice(result.error); return; }
-    state.values = result.values;
+    if (!result.ok) throw new Error(result.error || '读取设置失败');
+    state.values = { ...state.values, ...result.values };
     // 只刷新基线，不动这一页的草稿：切走再回来时用户的修改还在。
     state.baseline = clone(result.values);
     if (pageId === 'api') {
@@ -126,7 +121,7 @@ import { requestJson } from '/services/request.js';
     });
   }
 
-  async function save() {
+  async function save(force = false) {
     if (state.saving) return;
     const pageId = state.page;
     const changed = catalog.forPage(pageId).filter(field => isDirty(field, pageId));
@@ -135,36 +130,26 @@ import { requestJson } from '/services/request.js';
     dom.save.disabled = true;
     hideConflicts();
     try {
-      for (const field of changed) {
-        const domain = field.domain;
-        const base = state.baseline[domain] || {};
-        const draft = state.draft[domain] || {};
-        const changes = {};
-        if (Object.hasOwn(draft, field.key)) changes[field.key] = draft[field.key];
-        if (field.id === 'usage.taskEndOn') {
-          Object.assign(changes, pages.toPatch(field, currentValue(field), state.values).size || {});
-        }
-        if (!Object.keys(changes).length) continue;
-        const result = await bridge.writeSettings({ domain, changes, base });
+      const domains = [...new Set(changed.filter(f => f.type !== 'combo').map(f => f.domain))];
+      for (const domain of domains) {
+        const changes = state.draft[domain] || {};
+        const result = await bridge.writeSettings({ domain, changes, base: state.baseline[domain] || {}, force });
         if (!result.ok && result.conflicts) { showConflicts(result.conflicts, domain); return; }
         if (!result.ok) { showNotice(result.error || '保存失败'); return; }
-        // 逐字段保存后立刻更新基线，下一个字段的冲突判定才不会用旧值。
-        Object.assign(state.baseline[domain] || (state.baseline[domain] = {}), changes);
-        if (result.values) state.values[domain] = result.values;
-        delete state.draft[domain][field.key];
+        state.values[domain] = result.values;
+        state.baseline[domain] = clone(result.values);
+        delete state.draft[domain];
       }
-      // 组合字段还需要写 usage 域。
-      const combo = catalog.forPage(pageId).find(field => field.id === 'usage.taskEndOn');
-      if (combo && isDirty(combo)) {
-        const patch = pages.toPatch(combo, currentValue(combo), state.values).usage;
-        const result = await bridge.writeSettings({ domain: 'usage', changes: patch.taskEnd, base: state.baseline.usage || {} });
+      if (Object.hasOwn(state.draft, '__combo')) {
+        const value = state.draft.__combo;
+        const result = await bridge.writeSettings({ domain: 'completion',
+          changes: { turnCostOn: value !== 'off', on: value === 'both' },
+          base: { turnCostOn: state.values.size?.turnCostOn, on: state.values.usage?.taskEnd?.on } });
         if (!result.ok) { showNotice(result.error || '保存失败'); return; }
-        if (result.values) state.values.usage = result.values;
-        state.draft.__combo = undefined;
       }
       state.draft = {};
+      await refresh();
       showNotice('已保存', 'info');
-      updateChrome();
     } catch (error) {
       showNotice(error?.message || '保存失败，草稿仍保留在当前页');
     } finally {
@@ -180,7 +165,8 @@ import { requestJson } from '/services/request.js';
 
   function resetDefaults() {
     for (const field of catalog.forPage(state.page)) {
-      if (field.type === 'locked') continue;
+      if (field.type === 'locked' || field.bridged || ['role', 'position', 'snap', 'group', 'message', 'action'].includes(field.type) || field.private) continue;
+      if (field.type === 'combo') { state.draft.__combo = 'both'; continue; }
       const patch = pages.toPatch(field, field.defaultValue, state.values);
       for (const [domain, changes] of Object.entries(patch)) {
         state.draft[domain] = state.draft[domain] || {};
@@ -223,12 +209,12 @@ import { requestJson } from '/services/request.js';
     mine.className = 'set-button primary';
     mine.type = 'button';
     mine.textContent = '保留我的修改';
-    mine.addEventListener('click', async () => { hideConflicts(); await bridge.writeSettings({ domain, changes: Object.fromEntries(conflicts.map(c => [c.key, c.yours])), base: state.baseline[domain] || {}, force: true }); state.draft = {}; showNotice('已保存', 'info'); await refresh(); });
+    mine.addEventListener('click', async () => { hideConflicts(); await save(true); });
     const theirs = document.createElement('button');
     theirs.className = 'set-button';
     theirs.type = 'button';
     theirs.textContent = '用当前值';
-    theirs.addEventListener('click', async () => { hideConflicts(); state.draft = {}; await refresh(); });
+    theirs.addEventListener('click', async () => { hideConflicts(); for (const item of conflicts) delete state.draft[domain]?.[item.key]; await refresh(); });
     actions.append(mine, theirs);
     box.append(actions);
     box.hidden = false;
@@ -246,13 +232,11 @@ import { requestJson } from '/services/request.js';
     return '在挂件里编辑';
   }
 
-  const BRIDGE_EDITOR = {
-    role: 'role', position: 'snap', snap: 'snap', group: 'bubble', message: 'reminder', action: 'workshop',
-  };
-
-  function bridgeTo(field) {
-    const editor = BRIDGE_EDITOR[field.type] || 'bubble';
-    bridge.focusWhale(editor);
+  async function bridgeTo(field) {
+    try {
+      const opened = await bridge.focusWhale(pages.editorFor(field).editor);
+      if (!opened) showNotice('编辑器未能打开，请稍后重试');
+    } catch { showNotice('编辑器未能打开，请稍后重试'); }
   }
 
   const context = {
@@ -328,7 +312,7 @@ import { requestJson } from '/services/request.js';
     return catalog.pages.some(page => page.id === hash) ? hash : catalog.pages[0].id;
   }
 
-  dom.save.addEventListener('click', save);
+  dom.save.addEventListener('click', () => save());
   dom.revert.addEventListener('click', revert);
   dom.reset.addEventListener('click', resetDefaults);
 
@@ -337,11 +321,9 @@ import { requestJson } from '/services/request.js';
   bridge.onSettingsChanged(change => {
     state.values[change.domain] = change.values;
     for (const key of change.keys) {
-      if (state.baseline[change.domain] && !(state.draft[change.domain] || {})[key]) {
-        state.baseline[change.domain][key] = change.values[key];
-      }
+      const edited = Object.values(state.drafts).some(draft => Object.hasOwn(draft[change.domain] || {}, key));
+      if (state.baseline[change.domain] && !edited) state.baseline[change.domain][key] = change.values[key];
     }
-    if (state.draft[change.domain]) for (const key of change.keys) delete state.draft[change.domain][key];
     updateChrome();
   });
 

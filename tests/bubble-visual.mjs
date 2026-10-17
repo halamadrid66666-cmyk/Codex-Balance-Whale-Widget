@@ -42,7 +42,9 @@ const child = spawn(electronExecutable(), [path.join(ROOT, 'desktop', 'main.cjs'
 let stderr = '';
 child.stderr.on('data', c => { stderr += c; });
 child.stdout.on('data', () => {});
+const timeout = setTimeout(() => child.kill(), 180000);
 const code = await new Promise(r => child.on('exit', r));
+clearTimeout(timeout);
 
 const reportFile = path.join(output, 'bubble-visual.json');
 if (!fs.existsSync(reportFile)) {

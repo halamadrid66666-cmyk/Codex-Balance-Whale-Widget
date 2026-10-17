@@ -41,11 +41,11 @@ function registerIpcHandlers({ ipcMain, host }) {
   // 设置窗口唯一被允许的通用命令：点亮鲸鱼并唤起它自己的编辑器弹层。
   const settingsCommands = {
     'focus-whale': () => { host.show(); return true; },
-    'open-editor': payload => { host.show(); return host.sendCommand('open-editor', typeof payload?.editor === 'string' ? payload.editor : ''); },
+    'open-editor': payload => { host.show(); return host.sendCommand('open-editor', { editor: typeof payload?.editor === 'string' ? payload.editor : '' }); },
   };
 
   ipcMain.on('whale-storage', event => { event.returnValue = accepted(event) ? host.storage() : {}; });
-  ipcMain.on('whale-save-storage', (event, input) => { if (accepted(event)) host.storeStorage(input); });
+  ipcMain.handle('whale-save-storage', (event, input) => accepted(event) ? host.storeStorage(input) : { ok: false });
   ipcMain.on('whale-user-gesture', event => { if (fromMainFrame(event) || fromRole(event, 'settings')) host.markGesture(); });
   ipcMain.on('whale-shape', (event, rects) => { if (fromMainFrame(event)) host.applyShape(rects); });
   ipcMain.on('whale-ready', event => { if (accepted(event)) host.rendererReady(); });
@@ -73,22 +73,22 @@ function registerIpcHandlers({ ipcMain, host }) {
       return handler ? handler(payload) : false;
     }
     const handler = commands[command];
-    return handler ? handler() : false;
+    return handler ? handler(payload) : false;
   });
   // 设置窗口专用：读写配置。它走主进程的 SettingsStore，挂件和设置页共用一条写路径。
-  ipcMain.handle('whale-settings-read', (event, request) => {
+  ipcMain.handle('whale-settings-read', async (event, request) => {
     if (!fromRole(event, 'settings') || !host.settingsStore()) return { ok: false, error: '设置未就绪' };
-    try { return { ok: true, values: host.settingsStore().read(request?.domains || 'size') }; }
+    try { return { ok: true, values: await host.settingsStore().read(request?.domains || 'size') }; }
     catch (error) { return { ok: false, error: error?.message || '读取设置失败' }; }
   });
-  ipcMain.handle('whale-settings-write', (event, request) => {
+  ipcMain.handle('whale-settings-write', async (event, request) => {
     if (!fromRole(event, 'settings') || !host.settingsStore()) return { ok: false, error: '设置未就绪' };
-    try { return host.settingsStore().save(request || {}); }
+    try { return await host.settingsStore().save(request || {}); }
     catch (error) { return { ok: false, error: error?.message || '保存设置失败' }; }
   });
-  ipcMain.handle('whale-settings-preview', (event, request) => {
+  ipcMain.handle('whale-settings-preview', async (event, request) => {
     if (!fromRole(event, 'settings') || !host.settingsStore()) return { ok: false, error: '设置未就绪' };
-    try { return host.settingsStore().preview(request || {}); }
+    try { return await host.settingsStore().preview(request || {}); }
     catch (error) { return { ok: false, error: error?.message || '预览失败' }; }
   });
 }

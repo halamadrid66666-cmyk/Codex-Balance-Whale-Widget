@@ -62,7 +62,7 @@ test('falsy values are real changes, not "unchanged"', async () => {
 test('an unknown domain is refused', async () => {
   const store = new SettingsStore({ domains: {} });
   assert.equal((await store.save({ domain: 'nope', changes: { a: 1 } })).ok, false);
-  assert.throws(() => store.read('nope'), /未知的设置域/);
+  await assert.rejects(store.read('nope'), /未知的设置域/);
 });
 
 test('a key changed elsewhere while the page was open is reported as a conflict', async () => {
@@ -123,10 +123,10 @@ test('onChange reports which keys were written so other windows can refresh', as
   assert.equal(seen[0].values.vol, 0.9, '广播应带上合并后的完整值');
 });
 
-test('preview matches what save would write and never touches the domain', () => {
+test('preview matches what save would write and never touches the domain', async () => {
   const domain = memoryDomain({ scale: 1, vol: 0.9 });
   const store = new SettingsStore({ domains: { size: domain } });
-  const preview = store.preview({ domain: 'size', changes: { scale: 2 } });
+  const preview = await store.preview({ domain: 'size', changes: { scale: 2 } });
   assert.equal(preview.ok, true);
   assert.equal(preview.values.scale, 2);
   assert.equal(preview.values.vol, 0.9);
@@ -134,10 +134,10 @@ test('preview matches what save would write and never touches the domain', () =>
   assert.equal(domain.raw().scale, 1, '预览不得落盘');
 });
 
-test('preview reports no change when the draft equals the stored value', () => {
+test('preview reports no change when the draft equals the stored value', async () => {
   const domain = memoryDomain({ scale: 1 });
   const store = new SettingsStore({ domains: { size: domain } });
-  assert.deepEqual(store.preview({ domain: 'size', changes: { scale: 1 } }).changedKeys, []);
+  assert.deepEqual((await store.preview({ domain: 'size', changes: { scale: 1 } })).changedKeys, []);
 });
 
 test('sameValue compares structurally, not by identity', () => {

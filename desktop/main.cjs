@@ -11,7 +11,7 @@ const { externalWebUrl } = require('./external-links.cjs');
 const { syncNativeViewport } = require('./native-viewport.cjs');
 const { createHeartbeatMonitor } = require('./heartbeat.cjs');
 const { registerIpcHandlers } = require('./ipc-handlers.cjs');
-const { SettingsStore } = require('./settings-store.cjs');
+const { SettingsStore, createSoundSettingsDomains } = require('./settings-store.cjs');
 const { createTestHarness } = require('./test-harness.cjs');
 const { validateWindowShape, EMPTY_SHAPE } = require('./window-shape.cjs');
 const { createVisibilityController } = require('./visibility.cjs');
@@ -273,16 +273,6 @@ function closeSettingsWindow() {
   if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.destroy();
   settingsWindow = null;
 }
-// size/usage 两域共用 SoundSettingsService 的同一事务（journal + 失败恢复）。
-// 主线的 .save() 走串行队列返回 Promise，正好匹配 SettingsStore 的异步保存契约。
-async function saveSoundSettingsDomain(domain, changed) {
-  const current = await dispatcher.soundSettings.load();
-  const command = { schemaVersion: current.schemaVersion, revision: current.revision, size: current.size, usage: current.usage };
-  command[domain] = { ...current[domain], ...changed };
-  const saved = await dispatcher.soundSettings.save(command);
-  if (!saved || saved.ok === false) throw new Error(saved?.error || '保存设置失败');
-  return saved;
-}
 async function setHost(host) {
   host = normalizeHostState(host, { platform: process.platform });
   if (!host) return;
@@ -300,7 +290,18 @@ async function setHost(host) {
     updateTray();
   } else if (!isMac && !harness.enabled && host.mode && host.mode !== desktopMode) return;
   if (desktopMode === 'standalone') {
-    if (window && !host.nativeFollowing && !host.attached && !desktopBoundsApplied) { window.setBounds(screen.getPrimaryDisplay().workArea); window.setAlwaysOnTop(true, 'floating'); desktopBoundsApplied = true; visibilityController.requestRecovery(); }
+    // macOS may move an overlay while restoring windows or switching Spaces.
+    // Desktop mode owns its geometry even when Codex is still observable.
+    if (window && !host.nativeFollowing) {
+      const target = screen.getPrimaryDisplay().workArea;
+      const current = window.getBounds();
+      const boundsDrifted = ['x', 'y', 'width', 'height'].some(key => Math.abs(current[key] - target[key]) >= 1);
+      if (boundsDrifted) window.setBounds(target);
+      if (boundsDrifted || !desktopBoundsApplied) {
+        window.setAlwaysOnTop(true, 'floating');
+        desktopBoundsApplied = true;
+      }
+    }
     visibility(); return;
   }
   if (!host.hostAlive) { if (window) app.quit(); return; }
@@ -344,7 +345,7 @@ const ipcHost = {
   windows,
   quitting: () => quitting,
   storage: () => values(),
-  storeStorage: input => storeValues(input),
+  storeStorage: input => uiStore.applyPatch(input),
   markGesture: () => { trustedGestureAt = Date.now(); },
   gestureFresh: () => !!trustedGestureAt && Date.now() - trustedGestureAt <= 1000,
   applyShape: rects => applyWindowShape(rects),
@@ -379,14 +380,7 @@ else {
     // 这里只做域适配，不建立第二套写入者。
     settingsStore = new SettingsStore({
       domains: {
-        size: {
-          read: () => dispatcher.soundSettings.load().size,
-          write: values => saveSoundSettingsDomain('size', values),
-        },
-        usage: {
-          read: () => dispatcher.soundSettings.load().usage,
-          write: values => saveSoundSettingsDomain('usage', values),
-        },
+        ...createSoundSettingsDomains(dispatcher.soundSettings),
         ui: {
           // 值在磁盘上是字符串，对象字段是 JSON 文本。这里解析出来给界面用，
           // 键名保持真实的 dshw-* ，便于回读和文档核对。
@@ -397,14 +391,15 @@ else {
             }
             return parsed;
           },
-          write: values2 => {
+          write: async (_next, { changes }) => {
             const encoded = {};
-            for (const [key, value] of Object.entries(values2)) {
+            for (const [key, value] of Object.entries(changes)) {
               if (typeof value === 'string') { encoded[key] = value; continue; }
               if (value === null) { encoded[key] = null; continue; }
               encoded[key] = JSON.stringify(value);
             }
             uiStore.setKeys(encoded);
+            await uiStore.flush();
           },
         },
         displayMode: {
@@ -418,6 +413,13 @@ else {
             uiStore.setKeys({ 'dshw-account-view': values2.mode });
           },
         },
+        api: {
+          read: () => dispatcher.whale.config.settingsInfo().settings,
+          write: (_next, { changes }) => dispatcher.whale.config.save(changes),
+        },
+        bubble: { read: () => ({}), write: () => { throw new Error('请在气泡编辑器中保存'); } },
+        media: { read: () => ({}), write: () => { throw new Error('请在素材编辑器中保存'); } },
+        apiModels: { read: () => ({}), write: () => { throw new Error('请在 API 编辑器中保存'); } },
       },
       onChange: change => {
         for (const target of [window, settingsWindow]) {
@@ -530,8 +532,8 @@ else {
     const watchdog = setTimeout(finish, 6500);
     shutdownCompanion({
       readRenderer: () => window && !window.isDestroyed() && !window.webContents.isDestroyed() && !window.webContents.isCrashed?.()
-        ? window.webContents.executeJavaScript("Object.fromEntries(Object.keys(localStorage).filter(k => /^dshw[-v]/.test(k)).map(k => [k, localStorage.getItem(k)]))") : null,
-      saveRenderer: storeValues,
+        ? window.webContents.executeJavaScript("window.WhaleStorageSync?.pending() || null") : null,
+      saveRenderer: patch => uiStore.applyPatch(patch),
       flushState: () => uiStore.flush(),
       closeBridge: () => bridge?.close(),
       closeDispatcher: () => dispatcher?.close(),

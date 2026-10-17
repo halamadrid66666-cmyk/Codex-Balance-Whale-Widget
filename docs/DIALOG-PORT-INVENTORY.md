@@ -1,5 +1,7 @@
 # 对话框优化迁移：来源行为 × 目标实现对照表
 
+> 2026-10-17 复核修复补充见 [DIALOG-PORT-FIXES.md](DIALOG-PORT-FIXES.md)。设置读取/预览现为异步，挂件写入改为按键补丁加基线校验，编辑器路由与跳转文案已修复。
+
 日期：2026-10-17。基线：origin/main `2de43f3`（2026-10-16 联网核实）。来源：`e6abcb5..37f3b57`（对话框优化，两个提交）。
 本文登记每个来源行为的处理结论。判定依据来自本轮实际代码核对与验证，不是照抄旧报告。
 
@@ -15,7 +17,7 @@
 | 读取提醒设置不因配置未就绪失败、不覆盖自定义链接（缺陷 ③） | `runtime/service.mjs` `resolveUsageSettings` | **已移植** | 主线仍有无条件 `defaults.alert.lines.find(...).url = dashboardUrl`；已包 try/catch + 空值守卫，测试见 `tests/usage-settings-reliability.test.mjs` |
 | 提醒域 null 显式恢复默认、非法输入明确报错 | `runtime/service.mjs` `prepareUsageSettings` | **已移植并扩展** | 主线把 usage 拆成 prepare/commit 事务；null 重置与非法报错移植进 `prepareUsageSettings`（含 `events` 域），落盘走 `writeUsageSettings` 回读一致 |
 | 手动额度显式 null 删除（缺陷 ④） | `runtime/api-models.mjs` `save` | **主线已覆盖，未移植** | 主线重建 `model` 对象，`keep('manualQuota', null)` 为 null 时字段自然不落盘；空对象仍报错（符合"非法输入明确报错"）；回归见 `tests/settings-store.test.mjs` 的 manualQuota 两条 |
-| `/api/ui-state` PUT 按键合并 | 路由已删除 | **按主线架构改写，未照搬** | 主线无该路由；改为 `UiStateStore.setKeys()`（按键合并、null 删除），供设置窗口的 `ui` 域写入使用；挂件渲染器的整份 `save()` 语义保留（它镜像自己的 localStorage，是唯一合法的整份写入者） |
+| `/api/ui-state` PUT 按键合并 | 路由已删除 | **按主线架构改写，未照搬** | 主线无该路由；改为 `UiStateStore.setKeys()`（按键合并、null 删除），供设置窗口的 `ui` 域写入使用；复核后挂件渲染器的 `save()` 也改为带基线的按键补丁，旧整份快照被拒绝，退出写入使用同一协议 |
 | 每轮提示音量/按压手感等 | `runtime/sound-settings.mjs` | **主线已覆盖，未移植** | 主线的 SoundSettingsService（事务 + journal + 恢复）是来源实施之后的演进，来源对应代码已过时 |
 
 ## 2. 批次二：气泡与额度卡排版（T04）

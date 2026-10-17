@@ -11,6 +11,21 @@ class UiStateStore {
     this.writes = Promise.resolve();
   }
   get() { return this.value; }
+  // Compare each submitted key against the renderer's acknowledged baseline.
+  // An in-flight snapshot can never undo a newer settings-window change.
+  applyPatch(input) {
+    if (!input?.changes || !input.base || typeof input.changes !== 'object' ||
+        typeof input.base !== 'object' || Array.isArray(input.changes) || Array.isArray(input.base)) return { ok: false };
+    const accepted = {}, conflicts = [];
+    for (const [key, value] of Object.entries(input.changes)) {
+      if (!/^dshw[-v]/.test(key) || !(value === null || typeof value === 'string' && value.length < 1024 * 1024)) continue;
+      const current = this.value[key] ?? null;
+      if (current !== (input.base[key] ?? null) && current !== value) { conflicts.push(key); continue; }
+      accepted[key] = value;
+    }
+    this.setKeys(accepted);
+    return { ok: true, values: { ...this.value }, conflicts };
+  }
   set(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) return;
     const accepted = {};

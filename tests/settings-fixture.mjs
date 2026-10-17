@@ -57,6 +57,8 @@ export async function verifySettingsWindow({ window, settingsWindow, openSetting
   // ── 内容：六个分类，字段行，说明按钮 ─────────────────────────────────
   await waitFor('!!document.querySelectorAll("#set-nav button").length', '左侧分类');
   const navCount = await ev('document.querySelectorAll("#set-nav button").length');
+  const loadedSize = (await dispatcher.soundSettings.load()).size;
+  check(await ev('WhaleSettingsTest.state.baseline.size.scale') === loadedSize.scale, '窗口初次加载读取真实 scale，而非使用默认值');
   check(navCount === 6, '左侧有 6 个分类（实际 ' + navCount + '）');
   const rowCount = await ev('document.querySelectorAll(".set-row").length');
   check(rowCount > 0, '当前分类渲染出 ' + rowCount + ' 行设置');
@@ -66,6 +68,8 @@ export async function verifySettingsWindow({ window, settingsWindow, openSetting
   await shoot('01-appearance');
 
   // ── ! 说明浮层：打开、Esc 关闭、焦点归还 ─────────────────────────────
+  current.focus();
+  await waitFor('document.hasFocus()', '设置测试窗口聚焦');
   await ev('document.querySelector(".set-help-button").click()');
   await waitFor('!!document.querySelector(".set-help")', '说明浮层');
   const helpText = await ev('document.querySelector(".set-help").innerText');
@@ -76,7 +80,8 @@ export async function verifySettingsWindow({ window, settingsWindow, openSetting
   await shoot('02-help');
   await ev('document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
   await waitFor('!document.querySelector(".set-help")', '说明浮层关闭');
-  check(await ev('document.activeElement.classList.contains("set-help-button")'), 'Esc 关闭后焦点回到原按钮');
+  await waitFor('document.activeElement.classList.contains("set-help-button")', 'Esc 焦点归位');
+  check(true, 'Esc 关闭后焦点回到原按钮');
   // 说明按钮不应触发表单提交或切换相邻控件
   const before = await ev('JSON.stringify(window.WhaleSettingsTest.state.draft)');
   await ev('document.querySelector(".set-help-button").click()');
@@ -126,6 +131,14 @@ export async function verifySettingsWindow({ window, settingsWindow, openSetting
   }
   check(Math.abs(reread.scale - 1.9) < 0.001, '通过 size.json 接口回读一致');
   await shoot('04-saved');
+  for (const value of [2.1, 1.9]) {
+    await ev(`(() => { const r=[...document.querySelectorAll('.set-row')].find(r=>r.querySelector('.set-id')?.textContent==='size.scale'); const i=r.querySelector('input'); i.value='${value}'; i.dispatchEvent(new Event('change',{bubbles:true})); document.getElementById('set-save').click(); })()`);
+    await waitFor('!WhaleSettingsTest.state.saving && document.getElementById("set-dirty").hidden', '连续保存');
+    check(Math.abs((await dispatcher.soundSettings.load()).size.scale-value)<0.001, '带保存基线再次保存大小 '+value+' 成功');
+    await wait(async () => await window.webContents.executeJavaScript(`window.__whaleRenderTest.status().scale === ${value}`), '挂件即时应用大小');
+    check(true, '保存后挂件立即应用大小 '+value);
+  }
+
 
   // ── 撤销：回到磁盘上的值 ────────────────────────────────────────────
   await ev('document.getElementById("set-revert").click()');
@@ -278,6 +291,39 @@ export async function verifySettingsWindow({ window, settingsWindow, openSetting
     check(['off', 'bubble', 'both', 'custom'].includes(remindValue), '完成提醒显示当前组合（' + remindValue + '）');
     // 挂件菜单靠真实光标悬停才展开，而测试里光标路由是被桩掉的，
     // 所以一级菜单的可见性用上面的 DOM 断言证明，不产出截图。
+  }
+
+  await ev('WhaleSettingsTest.go("sound")');
+  await ev('WhaleSettingsTest.revert()');
+  for (const value of ['off', 'both']) {
+    await ev(`(() => { const row=[...document.querySelectorAll('.set-row')].find(r=>r.querySelector('.set-id')?.textContent==='usage.taskEndOn'); const input=row.querySelector('select'); input.value='${value}'; input.dispatchEvent(new Event('change',{bubbles:true})); document.getElementById('set-save').click(); })()`);
+    await waitFor('!WhaleSettingsTest.state.saving && document.getElementById("set-dirty").hidden', '完成提醒组合保存');
+    const saved = await dispatcher.soundSettings.load();
+    check(saved.size.turnCostOn === (value !== 'off') && saved.usage.taskEnd.on === (value === 'both'), '完成提醒 '+value+' 经同一事务保存到两个配置域');
+  }
+  await ev(`(() => { const row=[...document.querySelectorAll('.set-row')].find(r=>r.querySelector('.set-id')?.textContent==='usage.taskEndVol'); const input=row.querySelector('input'); input.value='0.35'; input.dispatchEvent(new Event('change',{bubbles:true})); document.getElementById('set-save').click(); })()`);
+  await waitFor('!WhaleSettingsTest.state.saving && document.getElementById("set-dirty").hidden', '嵌套音量保存');
+  const volumeSaved = await dispatcher.soundSettings.load();
+  check(volumeSaved.usage.taskEnd.vol === .35 && volumeSaved.usage.taskEnd.volSet === true, '完成提示音量写入真实嵌套字段并启用独立音量');
+
+  // Traverse actual settings buttons, IPC, preload and visible editor surfaces.
+  const widgetEv = code => window.webContents.executeJavaScript(code, true);
+  await widgetEv('window.__editorReceived=[]; window.addEventListener("whale-open-editor",e=>window.__editorReceived.push(e.detail.editor))');
+  for (const entry of [
+    { page:'appearance', id:'ui.role', editor:'role', selector:'.dshwv-rolelist' },
+    { page:'bubble', id:'bubble.sequences', editor:'bubble', selector:'.dshwv-bubmask' },
+    { page:'media', id:'media.workshop', editor:'workshop', selector:'dialog[open]' },
+    { page:'media', id:'media.audio', editor:'sound', selector:'[data-feature="sound-settings-dialog"]' },
+    { page:'api', id:'api.models', editor:'api', selector:'dialog[open]' },
+  ]) {
+    await ev(`WhaleSettingsTest.go(${JSON.stringify(entry.page)})`);
+    check(!(await ev('document.body.textContent')).includes('回到挂件细调'), '分类 '+entry.page+' 使用具体动作名称');
+    await ev(`(() => { const r=[...document.querySelectorAll('.set-row')].find(r=>r.querySelector('.set-id')?.textContent===${JSON.stringify(entry.id)}); if(!r) throw Error('missing bridge'); r.querySelector('button').click(); })()`);
+    await wait(async () => await widgetEv(`window.__editorReceived.at(-1)===${JSON.stringify(entry.editor)} && [...document.querySelectorAll(${JSON.stringify(entry.selector)})].some(e=>e.checkVisibility({visibilityProperty:true}))`), '实际打开 '+entry.editor);
+    check(true, entry.id+' 点击后确实打开 '+entry.editor+' 编辑器');
+    const shot = await window.webContents.capturePage();
+    fs.writeFileSync(path.join(shotDir, 'editor-'+entry.editor+'.png'), shot.toPNG());
+    await widgetEv(`(() => { for(const d of document.querySelectorAll('dialog[open]')) d.close(); document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); for(const b of document.querySelectorAll('button')) if(b.checkVisibility({visibilityProperty:true}) && ['取消','关闭'].includes(b.textContent.trim())) b.click(); })()`);
   }
 
   // ── 关闭设置窗口不退出挂件 ──────────────────────────────────────────

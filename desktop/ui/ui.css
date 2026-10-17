@@ -125,6 +125,7 @@ html.desktop.dshw-shape-round{--dshw-box-wu:655;--dshw-box-hu:325;--dshw-card-wu
    字号还小的时候；放大后并排放不下，圆角就会把「5 小时」拆成「5 小」「时」。 */
 .desktop .dshwv-quota-meter-head{
   display:grid;
+  grid-template-columns:minmax(0,1fr);
   justify-items:start;
   gap:calc(var(--dshw-u) * 5);
 }
@@ -138,17 +139,19 @@ html.desktop.dshw-shape-round{--dshw-box-wu:655;--dshw-box-hu:325;--dshw-card-wu
 .desktop .dshwv-quota-meter-value{
   display:inline-flex;
   align-items:baseline;
+  white-space:nowrap;
   color:var(--quota-ink);
   line-height:1;
 }
 .desktop .dshwv-quota-meter-number{
-  font-size:calc(var(--dshw-u) * 104);
+  font-size:calc(var(--dshw-u) * 78);
+  white-space:nowrap;
   font-weight:850;
   letter-spacing:-.02em;
 }
 .desktop .dshwv-quota-meter-unit{
   margin-left:calc(var(--dshw-u) * 6);
-  font-size:calc(var(--dshw-u) * 48);
+  font-size:calc(var(--dshw-u) * 36);
   font-weight:750;
   opacity:.72;
 }
@@ -186,12 +189,12 @@ html.desktop.dshw-shape-round{--dshw-box-wu:655;--dshw-box-hu:325;--dshw-card-wu
 .desktop .dshwv-quota-meter[data-quota-tone="unknown"] .dshwv-quota-meter-fill::after{display:none}
 .desktop .dshwv-quota-meter-foot{
   color:color-mix(in srgb,var(--quota-ink) 82%,#8e98ae);
-  font-size:calc(var(--dshw-u) * 46);
+  font-size:calc(var(--dshw-u) * 32);
   line-height:1.05;
 }
 .desktop .dshwv-quota-meter-reset-label{
   opacity:.75;
-  font-size:calc(var(--dshw-u) * 40);
+  font-size:calc(var(--dshw-u) * 32);
 }
 .desktop .dshwv-quota-meter-reset{
   min-width:0;
@@ -204,10 +207,12 @@ html.desktop.dshw-shape-round{--dshw-box-wu:655;--dshw-box-hu:325;--dshw-card-wu
 /* 底部同样上下排：「重置」和「等待同步」并排会被挤成「重」「置」两行。 */
 .desktop .dshwv-quota-meter-foot{
   display:grid;
+  grid-template-columns:minmax(0,1fr);
   justify-items:start;
   gap:calc(var(--dshw-u) * 3);
 }
-.desktop .dshwv-quota-meter-reset{text-align:left}
+.desktop .dshwv-quota-meter-reset{text-align:left;max-width:100%;white-space:nowrap;line-height:1.2}
+.desktop .dshwv-quota-meter[data-quota-tone="unknown"] .dshwv-quota-meter-reset{white-space:normal;overflow-wrap:normal}
 /* A hairline in the gap between the two gauges so they read as separate units. */
 .desktop .dshwv-text .dshwv-trowline .dshwv-quota-shell{position:relative}
 .desktop .dshwv-text .dshwv-trowline .dshwv-quota-shell + .dshwv-quota-shell::before{

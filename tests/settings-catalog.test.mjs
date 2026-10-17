@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
+const { createSoundSettingsDomains } = createRequire(import.meta.url)('../desktop/settings-store.cjs');
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -128,12 +130,11 @@ test('every field belongs to a storage domain the settings store actually regist
   // at a domain that does not exist or the save silently has nowhere to go.
   const mainSource = fs.readFileSync(path.join(root, 'desktop/main.cjs'), 'utf8');
   const registered = new Set(
-    [...mainSource.matchAll(/^        (\w+): \{$/gm)].map(match => match[1]),
+    [...mainSource.matchAll(/^        (\w+): \{/gm)].map(match => match[1]),
   );
-  assert.ok(registered.size >= 4, `未能从 main.cjs 解析出设置域，实际 ${registered.size} 个`);
+  for (const domain of Object.keys(createSoundSettingsDomains({}))) registered.add(domain);
+  assert.ok(registered.size >= 8, `未能从 main.cjs 解析出设置域，实际 ${registered.size} 个`);
   for (const field of loadCatalog().fields) {
-    // api / apiModels / bubble / media 由各自的既有端点处理，本轮仍是桥接或只读。
-    if (['api', 'apiModels', 'bubble', 'media'].includes(field.domain)) continue;
     assert.ok(registered.has(field.domain), `${field.id} 的 domain ${field.domain} 没有在主进程注册`);
   }
 });
@@ -143,4 +144,18 @@ test('fields that claim to be editable declare a write path', () => {
     if (field.type === 'locked') continue;
     assert.ok(field.write && field.write !== '—', `${field.id} 是可编辑字段，必须声明修改入口`);
   }
+});
+
+
+test('nested settings preserve sibling fields and editor destinations are explicit', () => {
+  const window = { WhaleSettingsCatalog: loadCatalog() };
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'desktop/ui/settings-pages.js'), 'utf8'), { window });
+  const pages = window.WhaleSettingsPages;
+  const field = window.WhaleSettingsCatalog.byId.get('usage.taskEndSel');
+  const values = { usage: { taskEnd: { on: true, sel: 'old', vol: .4 } } };
+  assert.equal(pages.readValue(field, values), 'old');
+  const patch = JSON.parse(JSON.stringify(pages.toPatch(field, 'preset:duck:press', values)));
+  assert.deepEqual(patch.usage.taskEnd, { on: true, sel: 'preset:duck:press', vol: .4 });
+  assert.equal(pages.editorFor(window.WhaleSettingsCatalog.byId.get('api.models')).editor, 'api');
+  assert.equal(pages.editorFor(window.WhaleSettingsCatalog.byId.get('media.audio')).editor, 'sound');
 });

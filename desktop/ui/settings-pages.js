@@ -2,7 +2,7 @@
 //
 // 每个字段按设置目录（settings-catalog.js）里的 type 渲染成对应控件，
 // 并统一在左侧挂上 `!` 说明按钮。需要画布的复杂编辑器不在这里重写：
-// 它们显示参数摘要加一个「回到挂件细调」按钮，由设置窗口唤起鲸鱼自己的弹层。
+// 它们显示参数摘要加一个「打开对应编辑器」按钮，由设置窗口唤起鲸鱼自己的弹层。
 (() => {
   'use strict';
 
@@ -14,40 +14,39 @@
     return node;
   };
 
-  // 复合字段由两个存储键共同决定，保存时要拆开写。
-  const COMBO_PARTS = {
-    'usage.taskEndOn': { off: { size: { turnCostOn: false }, usage: { taskEnd: { on: false } } }, bubble: { size: { turnCostOn: true }, usage: { taskEnd: { on: false } } }, both: { size: { turnCostOn: true }, usage: { taskEnd: { on: false } } } },
-  };
-
+  function pathValue(object, path) {
+    return path.split('.').reduce((value, key) => value?.[key], object);
+  }
   function readValue(field, values) {
     if (field.id === 'usage.taskEndOn') {
-      const bubbleOn = values.size?.turnCostOn !== false;
-      const soundOn = values.usage?.taskEnd?.on === true;
-      if (!bubbleOn && !soundOn) return 'off';
-      if (bubbleOn && !soundOn) return 'bubble';
-      if (bubbleOn && soundOn) return 'both';
-      return 'custom';
+      const bubble = values.size?.turnCostOn !== false, sound = values.usage?.taskEnd?.on === true;
+      return bubble ? (sound ? 'both' : 'bubble') : (sound ? 'custom' : 'off');
     }
-    return values[field.domain]?.[field.key];
+    return pathValue(values[field.domain], field.key.split(' / ')[0]);
   }
-
-  /** 把一个字段的草稿值翻译成各存储域要提交的补丁。 */
   function toPatch(field, value, base) {
-    if (field.id === 'usage.taskEndOn') {
-      return {
-        size: { turnCostOn: value !== 'off' },
-        usage: { taskEnd: { on: value === 'both' } },
-      };
+    if (field.id === 'usage.taskEndOn') return { size: { turnCostOn: value !== 'off' }, usage: { taskEnd: { ...base.usage?.taskEnd, on: value === 'both' } } };
+    const document = {};
+    const paths = field.key.split(' / ');
+    for (const keyPath of paths) {
+      const parts = keyPath.split('.');
+      if (parts.length === 1) { document[keyPath] = value; continue; }
+      const [root, key] = parts;
+      document[root] = { ...(document[root] || base[field.domain]?.[root]), [key]: key === 'volSet' ? true : value };
     }
-    return { [field.domain]: { [field.key]: value } };
+    return { [field.domain]: document };
   }
-
   function defaultFor(field, values) {
-    if (field.id === 'usage.taskEndOn') return 'both';
-    const stored = values[field.domain]?.[field.key];
-    if (stored !== undefined) return stored;
-    if (field.defaultValue === '—' || typeof field.defaultValue === 'string') return field.defaultValue;
-    return field.defaultValue;
+    return readValue(field, values) ?? field.defaultValue;
+  }
+  function editorFor(field) {
+    if (field.domain === 'api' || field.domain === 'apiModels') return { editor: 'api', label: '打开 API 编辑器' };
+    if (field.domain === 'media') return field.id === 'media.audio'
+      ? { editor: 'sound', label: '打开音效编辑器' } : { editor: 'workshop', label: '打开素材管理' };
+    if (field.id === 'ui.role') return { editor: 'role', label: '打开角色选择' };
+    if (field.type === 'snap' || field.type === 'position') return { editor: 'snap', label: '打开位置编辑器' };
+    if (field.page === 'sound') return { editor: 'sound', label: '打开音效编辑器' };
+    return { editor: 'bubble', label: '打开气泡编辑器' };
   }
 
   function makeControl(field, context) {
@@ -111,10 +110,10 @@
       return row;
     }
 
-    if (field.type === 'select') {
+    if (field.type === 'select' || field.type === 'combo') {
       const select = el('select');
       select.setAttribute('aria-label', field.label);
-      for (const option of field.options || []) {
+      for (const option of field.options || [{ value: 'off', label: '关闭' }, { value: 'bubble', label: '仅气泡' }, { value: 'both', label: '气泡和声音' }]) {
         const node = el('option', null, option.label);
         node.value = option.value;
         select.append(node);
@@ -156,8 +155,9 @@
     if (field.bridged || ['role', 'position', 'snap', 'group', 'message', 'action'].includes(field.type)) {
       const box = el('div', 'set-row-bridge');
       box.append(el('span', 'set-summary', context.summaryFor(field)));
-      const button = el('button', 'set-button', field.type === 'action' ? '打开素材包管理' : '回到挂件细调');
+      const button = el('button', 'set-button', editorFor(field).label);
       button.type = 'button';
+      button.title = '将在挂件中打开，修改后在编辑器内保存';
       button.addEventListener('click', () => context.bridge(field));
       box.append(button);
       row.append(box);
@@ -213,7 +213,7 @@
     notice.hidden = true;
     container.append(notice);
 
-    // 直接可编辑的字段先渲染，需要回到挂件细调的放在「进阶」小节后面。
+    // 直接可编辑的字段先渲染，需要打开对应编辑器的放在「进阶」小节后面。
     const direct = catalog.forPage(pageId).filter(field => !(field.bridged || ['role', 'position', 'snap', 'group', 'message', 'action'].includes(field.type)));
     const advanced = catalog.forPage(pageId).filter(field => direct.indexOf(field) < 0);
 
@@ -225,5 +225,5 @@
     return container;
   }
 
-  window.WhaleSettingsPages = { renderPage, toPatch, readValue, defaultFor, COMBO_PARTS };
+  window.WhaleSettingsPages = { renderPage, toPatch, readValue, editorFor, defaultFor };
 })();

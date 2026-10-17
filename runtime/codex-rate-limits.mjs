@@ -24,6 +24,30 @@ export function quotaFromAppServer(response, observedAt = Date.now()) {
 
 export function findCodexExecutable(env = process.env) {
   if (env.CODEX_CLI_PATH && fs.existsSync(env.CODEX_CLI_PATH)) return env.CODEX_CLI_PATH;
+  if (process.platform === 'darwin') {
+    const executableFile = candidate => {
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return fs.statSync(candidate).isFile();
+      } catch { return false; }
+    };
+    // LaunchAgents have a minimal PATH, unlike an interactive terminal. Keep
+    // installed CLI precedence, then use an existing app's native CLI directly
+    // (npm launchers also need Node, which may be absent from that PATH).
+    for (const directory of String(env.PATH || '').split(path.delimiter).filter(Boolean)) {
+      const candidate = path.join(directory, 'codex');
+      if (executableFile(candidate)) return candidate;
+    }
+    for (const applications of [path.join(os.homedir(), 'Applications'), '/Applications']) {
+      for (const relative of [
+        ['Codex.app', 'Contents', 'Resources', 'codex'],
+        ['ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex'],
+      ]) {
+        const candidate = path.join(applications, ...relative);
+        if (executableFile(candidate)) return candidate;
+      }
+    }
+  }
   if (process.platform !== 'win32') return 'codex';
   const bin = path.join(env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'OpenAI', 'Codex', 'bin');
   try {

@@ -4643,7 +4643,30 @@ import {
     // 完整设置窗口保存后，主进程会把这批改动广播给两个窗口。挂件这边要把
     // 改动镜像回 localStorage（它才是运行期的读取源），并对需要即时重绘的项
     // 真正执行一次，否则要等重载才生效。
+    var settingsApplyEpoch = 0;
     try { window.whaleDesktop.onSettingsChanged(function (change) {
+      if (change && ['size', 'usage', 'completion'].includes(change.domain)) {
+        var ownSettingsEpoch = ++settingsApplyEpoch;
+        requestJson(SETTINGS_URL).then(function (snapshot) {
+          if (ownSettingsEpoch !== settingsApplyEpoch) return;
+          applySoundSettingsSnapshot(snapshot);
+          var saved = snapshot.size;
+          state.scale = saved.scale;
+          root.style.setProperty('--dshw-scale', String(saved.scale));
+          scaleInput.value = String(saved.scale); scaleNumber.value = String(scaleToDisplay(saved.scale));
+          bubbleOn = saved.bubbleOn; bubbleToggle.checked = bubbleOn;
+          scrollGapOn = saved.scrollGapOn; scrollGapPx = saved.scrollGapPx;
+          scrollGapToggle.checked = scrollGapOn; scrollGapInput.value = String(scrollGapPx); scrollGapInput.disabled = !scrollGapOn;
+          menuBtnHide = saved.menuBtnHide; if (menuHideToggle) menuHideToggle.checked = menuBtnHide;
+          applyMenuBtnHideUI(); settle(); syncLevel1Controls();
+          window.WhaleRendering.refitBubble();
+        }).catch(assetFailure);
+        return;
+      }
+      if (change && change.domain === 'displayMode') {
+        window.WhaleAccountView.setMode(change.values.mode).catch(assetFailure);
+        return;
+      }
       if (!change || change.domain !== 'ui' || !Array.isArray(change.keys)) return;
       for (var i = 0; i < change.keys.length; i++) {
         var key = change.keys[i];
@@ -4669,7 +4692,11 @@ import {
       }
     }); } catch (err) {}
 
-    // 完整设置窗口通过「回到挂件细调」唤起这里的原生编辑器。
+    window.addEventListener('whale-storage-reconciled', function () {
+      window.WhaleBubbleShape.apply(localStorage.getItem('dshw-bubble-shape') || 'ellipse');
+      window.WhaleFeedback?.reload();
+    });
+    // 完整设置窗口通过具体动作按钮唤起这里的原生编辑器。
     // 这些弹层闭包在 whale-widget.js 内部、依赖鲸鱼自身的 DOM 与状态，
     // 所以不搬进设置窗口，只在这里加事件监听。
     window.addEventListener('whale-open-editor', function (event) {
@@ -4681,6 +4708,13 @@ import {
       if (editor === 'bubble') { openBubbleEditor(); return; }
       if (editor === 'reminder') { usageAlertBudgetEditor('alert', function () {}); return; }
       if (editor === 'workshop' && window.WhaleWorkshopOpen) { window.WhaleWorkshopOpen(); return; }
+      if (editor === 'api') { window.dispatchEvent(new Event('whale-open-settings')); return; }
+      if (editor === 'sound') {
+        var soundEntry = document.querySelector('[data-action="open-sound-settings"]');
+        if (soundEntry) soundEntry.click();
+        else if (window.WhaleFeedback) window.WhaleFeedback.open();
+        return;
+      }
     });
     function snapCheck() {
       if (!snapConfig || snapConfig.mode === 'off') return;
