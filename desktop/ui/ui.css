@@ -33,25 +33,12 @@ html.desktop.dshw-shape-round{--dshw-box-wu:655;--dshw-box-hu:325;--dshw-card-wu
 .desktop .dshwv-text .dshwv-quota-heading{
   position:relative;
   margin:0 0 calc(var(--dshw-u) * 10)!important;
-  padding-left:calc(var(--dshw-u) * 40);
   color:#53669a!important;
   font-family:"Microsoft YaHei UI","PingFang SC",sans-serif;
   font-size:calc(var(--dshw-u) * 74)!important;
   font-weight:700!important;
   letter-spacing:.025em;
   line-height:1.15;
-}
-.desktop .dshwv-text .dshwv-quota-heading::before{
-  content:"";
-  position:absolute;
-  left:0;
-  top:50%;
-  width:calc(var(--dshw-u) * 22);
-  height:calc(var(--dshw-u) * 22);
-  border-radius:50%;
-  background:#53669a;
-  box-shadow:0 0 0 calc(var(--dshw-u) * 6) rgba(83,102,154,.14);
-  transform:translateY(-50%);
 }
 .desktop .dshwv-text .dshwv-quota-shell{
   width:calc(var(--dshw-u) * var(--dshw-card-wu));
