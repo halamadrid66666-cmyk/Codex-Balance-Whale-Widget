@@ -86,9 +86,18 @@ function createTestHarness({ enabled = process.env.WHALE_DESKTOP_TEST === '1', r
       const module = env.WHALE_VISIBILITY_STRESS === '1' ? 'visibility-stress-fixture.mjs'
         : env.WHALE_DESKTOP_AUDIT === '1' ? 'desktop-audit-fixture.mjs'
         : env.WHALE_BUBBLE_VISUAL === '1' ? 'bubble-visual-fixture.mjs'
+        : env.WHALE_SETTINGS_FIXTURE === '1' ? 'settings-fixture.mjs'
         : 'desktop-fixture.mjs';
       const loaded = await import(pathToFileURL(path.join(root, 'tests', module)));
       if (env.WHALE_BUBBLE_VISUAL === '1') return loaded.renderBubbleVisual({ ...context, errors });
+      if (env.WHALE_SETTINGS_FIXTURE === '1') {
+        const report = await loaded.verifySettingsWindow({ ...context, errors, output: env.WHALE_DESKTOP_VERIFY_DIR || null });
+        // 夹具拥有进程：写完报告退出，不进入正常的挂件生命周期。
+        const fs = require('node:fs');
+        fs.writeFileSync(path.join(env.WHALE_DESKTOP_VERIFY_DIR || context.dataDir, 'settings-window.json'), JSON.stringify(report, null, 2));
+        context.app.quit();
+        return report;
+      }
       await loaded.verifyDesktop({ ...context, errors, openedLinks });
     },
   };
