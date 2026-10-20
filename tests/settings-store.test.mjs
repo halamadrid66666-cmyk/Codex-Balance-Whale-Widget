@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -150,8 +150,8 @@ test('sameValue compares structurally, not by identity', () => {
 
 // ── 回归：三个既有缺陷 ──────────────────────────────────────────────────────
 
-const { WhaleService } = await import(path.join(root, 'runtime/service.mjs'));
-const { ApiModelRegistry } = await import(path.join(root, 'runtime/api-models.mjs'));
+const { WhaleService } = await import(pathToFileURL(path.join(root, 'runtime/service.mjs')));
+const { ApiModelRegistry } = await import(pathToFileURL(path.join(root, 'runtime/api-models.mjs')));
 
 // WhaleService needs a config carrying dataDir; resolve() is the only method the
 // usage-settings read path touches.
@@ -161,7 +161,7 @@ const registryFor = dataDir => new ApiModelRegistry({ dataDir, env: {} });
 // 主线的尺寸存储是 SizeSettingsStore（runtime/size-settings.mjs）：它自带
 // 多候选文件选择、prepare 合并与损坏文件报错，取代来源分支在 widget-host
 // 里的三处修复。这里按主线语义回归同一组行为。
-const { SizeSettingsStore } = await import(path.join(root, 'runtime/size-settings.mjs'));
+const { SizeSettingsStore } = await import(pathToFileURL(path.join(root, 'runtime/size-settings.mjs')));
 
 test('a partial size write no longer resets the fields it did not mention', () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-size-store-'));
